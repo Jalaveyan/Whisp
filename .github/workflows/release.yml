@@ -109,7 +109,7 @@ jobs:
           BASE="v1.0.0"
           LAST=$(git tag -l "${BASE}.*" | sort -V | tail -n1)
           if [ -z "$LAST" ]; then NEW="${BASE}.1"
-          else PATCH=$(echo "$LAST" | awk -F. '{print $3}'); NEW="${BASE}.$((PATCH+1))"; fi
+          else PATCH=$(echo "$LAST" | awk -F. '{print $NF}'); NEW="${BASE}.$((PATCH+1))"; fi
           echo "tag=$NEW" >> $GITHUB_OUTPUT
 
       - name: Upload release
