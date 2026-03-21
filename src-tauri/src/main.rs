@@ -51,6 +51,8 @@ struct AppSettings {
     #[serde(default)]
     routing_rules: Vec<RoutingRule>,
     #[serde(default)]
+    blocklist: Vec<RoutingRule>,
+    #[serde(default)]
     ml_transport: String,
     #[serde(default)]
     ml_server: String,
@@ -81,6 +83,7 @@ impl Default for AppSettings {
             auth_tip: true,
             secret: String::new(),
             routing_rules: Vec::new(),
+            blocklist: Vec::new(),
             ml_transport: String::new(),
             ml_server: String::new(),
             ml_token: String::new(),
@@ -131,6 +134,7 @@ fn save_app_setting(app: tauri::AppHandle, mut settings: AppSettings) -> Result<
         if let Ok(raw) = fs::read_to_string(&path) {
             if let Ok(existing) = serde_json::from_str::<AppSettings>(&raw) {
                 settings.routing_rules = existing.routing_rules;
+                settings.blocklist = existing.blocklist;
                 settings.ml_transport = existing.ml_transport;
                 settings.ml_server = existing.ml_server;
                 settings.ml_token = existing.ml_token;
@@ -203,15 +207,21 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
     })?;
 
     let config_path = mihomo_config_path(&app);
-    let routing_rules: Vec<mihomo::MihomoRoutingRule> = settings
-        .routing_rules
-        .iter()
-        .map(|r| mihomo::MihomoRoutingRule {
+    let mut routing_rules: Vec<mihomo::MihomoRoutingRule> = Vec::new();
+    for r in &settings.blocklist {
+        routing_rules.push(mihomo::MihomoRoutingRule {
+            kind: r.kind.clone(),
+            value: r.value.clone(),
+            action: "REJECT".to_string(),
+        });
+    }
+    for r in &settings.routing_rules {
+        routing_rules.push(mihomo::MihomoRoutingRule {
             kind: r.kind.clone(),
             value: r.value.clone(),
             action: r.action.clone(),
-        })
-        .collect();
+        });
+    }
 
     let mihomo_config = mihomo::generate_config(&mihomo::MihomoConfig {
         socks_addr: &socks_addr,
@@ -498,15 +508,77 @@ async fn save_routing_rules(app: tauri::AppHandle, rules: Vec<RoutingRule>) -> R
     } else {
         format!("{}:1080", settings.socks_addr)
     };
-    let routing_rules: Vec<mihomo::MihomoRoutingRule> = settings
-        .routing_rules
-        .iter()
-        .map(|r| mihomo::MihomoRoutingRule {
+    let mut routing_rules: Vec<mihomo::MihomoRoutingRule> = Vec::new();
+    for r in &settings.blocklist {
+        routing_rules.push(mihomo::MihomoRoutingRule {
+            kind: r.kind.clone(),
+            value: r.value.clone(),
+            action: "REJECT".to_string(),
+        });
+    }
+    for r in &settings.routing_rules {
+        routing_rules.push(mihomo::MihomoRoutingRule {
             kind: r.kind.clone(),
             value: r.value.clone(),
             action: r.action.clone(),
-        })
-        .collect();
+        });
+    }
+    let mihomo_config = mihomo::generate_config(&mihomo::MihomoConfig {
+        socks_addr: &socks_addr,
+        mixed_port: settings.mihomo_port,
+        tun_stack: &settings.tun_stack,
+        dns_redirect: settings.dns_redirect,
+        ipv6: settings.ipv6,
+        routing_rules: &routing_rules,
+    });
+    fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
+
+    let config_str = config_path.to_string_lossy().replace('\\', "/");
+    let _ = reqwest::Client::new()
+        .put("http://127.0.0.1:9090/configs?force=true")
+        .json(&serde_json::json!({ "path": config_str }))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_blocklist(app: tauri::AppHandle) -> Result<Vec<RoutingRule>, String> {
+    let settings = get_app_settings(app)?;
+    Ok(settings.blocklist)
+}
+
+#[tauri::command]
+async fn save_blocklist(app: tauri::AppHandle, rules: Vec<RoutingRule>) -> Result<(), String> {
+    let path = settings_path(&app);
+    let mut settings = get_app_settings(app.clone())?;
+    settings.blocklist = rules;
+    let data = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&path, &data).map_err(|e| e.to_string())?;
+
+    let config_path = mihomo_config_path(&app);
+    let socks_addr = if settings.socks_addr.contains(':') {
+        settings.socks_addr.clone()
+    } else {
+        format!("{}:1080", settings.socks_addr)
+    };
+    let mut routing_rules: Vec<mihomo::MihomoRoutingRule> = Vec::new();
+    for r in &settings.blocklist {
+        routing_rules.push(mihomo::MihomoRoutingRule {
+            kind: r.kind.clone(),
+            value: r.value.clone(),
+            action: "REJECT".to_string(),
+        });
+    }
+    for r in &settings.routing_rules {
+        routing_rules.push(mihomo::MihomoRoutingRule {
+            kind: r.kind.clone(),
+            value: r.value.clone(),
+            action: r.action.clone(),
+        });
+    }
     let mihomo_config = mihomo::generate_config(&mihomo::MihomoConfig {
         socks_addr: &socks_addr,
         mixed_port: settings.mihomo_port,
@@ -573,6 +645,154 @@ fn install_services(
     Ok("Services installed: WhisperaNH, WhisperaGW".to_string())
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct SubscriptionEntry {
+    id: String,
+    name: String,
+    url: String,
+    keys: Vec<String>,
+    servers: Vec<serde_json::Value>,
+    updated: String,
+}
+
+fn subscriptions_path(app: &tauri::AppHandle) -> PathBuf {
+    let dir = app.path().app_config_dir().unwrap_or_else(|_| PathBuf::from("."));
+    fs::create_dir_all(&dir).ok();
+    dir.join("subscriptions.json")
+}
+
+fn load_subs(app: &tauri::AppHandle) -> Vec<SubscriptionEntry> {
+    let path = subscriptions_path(app);
+    if !path.exists() { return Vec::new(); }
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_subs(app: &tauri::AppHandle, subs: &[SubscriptionEntry]) {
+    if let Ok(data) = serde_json::to_string_pretty(subs) {
+        fs::write(subscriptions_path(app), data).ok();
+    }
+}
+
+async fn fetch_sub_url(url: &str) -> Result<SubscriptionEntry, String> {
+    use base64::Engine as _;
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(12))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let text = client
+        .get(url)
+        .header("User-Agent", "Whisp/1.0")
+        .send()
+        .await
+        .map_err(|e| format!("fetch failed: {}", e))?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(text.trim())
+        .map_err(|e| format!("base64: {}", e))?;
+    let payload: serde_json::Value =
+        serde_json::from_slice(&decoded).map_err(|e| format!("json: {}", e))?;
+    let keys = payload["keys"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    let servers = payload["servers"].as_array().cloned().unwrap_or_default();
+    let name = payload["name"].as_str().unwrap_or("").to_string();
+    let updated = payload["updated"].as_str().unwrap_or("").to_string();
+    Ok(SubscriptionEntry { id: String::new(), name, url: url.to_string(), keys, servers, updated })
+}
+
+#[tauri::command]
+fn get_subscriptions(app: tauri::AppHandle) -> Vec<SubscriptionEntry> {
+    load_subs(&app)
+}
+
+#[tauri::command]
+async fn add_subscription(
+    app: tauri::AppHandle,
+    name: String,
+    url: String,
+) -> Result<SubscriptionEntry, String> {
+    let mut entry = fetch_sub_url(&url).await?;
+    entry.id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .to_string();
+    if !name.is_empty() {
+        entry.name = name;
+    }
+    entry.url = url;
+    let mut subs = load_subs(&app);
+    subs.push(entry.clone());
+    save_subs(&app, &subs);
+    Ok(entry)
+}
+
+#[tauri::command]
+async fn refresh_subscription(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<SubscriptionEntry, String> {
+    let mut subs = load_subs(&app);
+    let idx = subs.iter().position(|s| s.id == id).ok_or("Subscription not found")?;
+    let url = subs[idx].url.clone();
+    let fresh = fetch_sub_url(&url).await?;
+    subs[idx].keys = fresh.keys;
+    subs[idx].servers = fresh.servers;
+    subs[idx].updated = fresh.updated;
+    if subs[idx].name.is_empty() && !fresh.name.is_empty() {
+        subs[idx].name = fresh.name;
+    }
+    let result = subs[idx].clone();
+    save_subs(&app, &subs);
+    Ok(result)
+}
+
+#[tauri::command]
+fn delete_subscription(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let mut subs = load_subs(&app);
+    subs.retain(|s| s.id != id);
+    save_subs(&app, &subs);
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_subscription(app: tauri::AppHandle, id: String, name: String) -> Result<(), String> {
+    let mut subs = load_subs(&app);
+    let idx = subs.iter().position(|s| s.id == id).ok_or("not found")?;
+    subs[idx].name = name;
+    save_subs(&app, &subs);
+    Ok(())
+}
+
+#[tauri::command]
+async fn ping_key(key: String) -> Result<u64, String> {
+    let key = key.trim();
+    let host_port = key
+        .strip_prefix("whispera://")
+        .ok_or("not a whispera:// key")?
+        .split('?')
+        .next()
+        .filter(|s| !s.is_empty())
+        .ok_or("cannot parse server address")?
+        .to_string();
+    let start = std::time::Instant::now();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::net::TcpStream::connect(&host_port),
+    )
+    .await
+    .map_err(|_| "timeout".to_string())?
+    .map_err(|e| e.to_string())?;
+    Ok(start.elapsed().as_millis() as u64)
+}
 
 fn read_ml_api_token() -> String {
     let path = if cfg!(target_os = "windows") {
@@ -796,6 +1016,8 @@ fn main() {
             uninstall_services,
             get_routing_rules,
             save_routing_rules,
+            get_blocklist,
+            save_blocklist,
             get_ml_transport,
             connect_ml,
             get_ml_status,
@@ -806,6 +1028,12 @@ fn main() {
             ml_rank_bridges,
             ml_analyze_network,
             ml_recommend_transport,
+            get_subscriptions,
+            add_subscription,
+            refresh_subscription,
+            delete_subscription,
+            rename_subscription,
+            ping_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

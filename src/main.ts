@@ -4,10 +4,8 @@ import * as topojson from "topojson-client";
 import worldAtlas from "world-atlas/land-110m.json";
 import "./styles.css";
 
-// Pre-compute land GeoJSON once at module load
 const _landGeo = topojson.feature(worldAtlas as any, (worldAtlas as any).objects.land);
 
-/* ===================== SVG ICONS ===================== */
 const ICONS = {
   ml: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>`,
   bolt: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,
@@ -22,9 +20,10 @@ const ICONS = {
   play: `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>`,
   x: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
   link: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`,
+  ping: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
+  pencil: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
 };
 
-/* ===================== TYPES ===================== */
 interface AppSettings {
   conn_key: string;
   auto_connect: boolean;
@@ -42,6 +41,15 @@ interface AppSettings {
 
 interface Profile { id: string; name: string; key: string; }
 
+interface Subscription {
+  id: string;
+  name: string;
+  url: string;
+  keys: string[];
+  servers: unknown[];
+  updated: string;
+}
+
 interface SiteCheck {
   name: string;
   letter: string;
@@ -51,7 +59,7 @@ interface SiteCheck {
   ping: number;
 }
 
-type Page = "home" | "connections" | "profiles" | "routing" | "logs" | "settings" | "bridges" | "ml";
+type Page = "home" | "connections" | "profiles" | "routing" | "blocklist" | "logs" | "settings" | "bridges" | "ml";
 type Lang = "ru" | "en";
 
 interface BridgeInfo {
@@ -71,9 +79,7 @@ interface BridgeInfo {
   cur_users?: number;
   max_users?: number;
   version?: string;
-  // computed client-side
   distance_km?: number;
-  // ML-scored
   ml_score?: number;
   ml_reason?: string;
 }
@@ -108,12 +114,11 @@ let userLat = 0, userLon = 0;
 
 interface RoutingRule {
   id: string;
-  kind: "domain" | "process";
+  kind: "domain" | "process" | "domain-keyword" | "domain-full" | "ip";
   value: string;
-  action: "DIRECT" | "PROXY";
+  action: "DIRECT" | "PROXY" | "REJECT";
 }
 
-/* ===================== I18N ===================== */
 const i18n: Record<Lang, Record<string, string>> = {
   ru: {
     home: "Главная", connections: "Соединения", profiles: "Профили", routing: "Маршруты", logs: "Журнал", settings: "Настройки", bridges: "Мосты", ml: "Режим ML",
@@ -129,6 +134,19 @@ const i18n: Record<Lang, Record<string, string>> = {
     mlAvgRtt: "Средний RTT", mlReachable: "Хостов доступно",
     mlTransportRec: "Рекомендуемый транспорт", mlTransportDesc: "Почему",
     mlScanFirst: "Нажмите «Анализировать сеть» для рекомендации транспорта",
+    mlTraining: "Тренировка модели", mlTrainStart: "Запустить тренировку", mlTrainStop: "Остановить",
+    mlTrainRunning: "Тренируется...", mlTrainEpoch: "Эпоха", mlTrainLoss: "Loss", mlTrainProgress: "Прогресс",
+    mlTrainDone: "Тренировка завершена", mlTrainFailed: "Ошибка тренировки",
+    mlPortScan: "Сканирование портов", mlScanStart: "Сканировать", mlScanRunning: "Сканирование...",
+    mlScanHost: "Хост", mlScanPort: "Порт", mlScanService: "Сервис", mlScanLatency: "Задержка",
+    mlScanOpen: "открыт", mlScanClosed: "закрыт", mlScanNoResults: "Нет результатов",
+    mlFederated: "Федеративное обучение", mlFedExport: "Экспорт дельты", mlFedImport: "Импорт дельты",
+    mlFedLosses: "Loss метрики", mlFedExported: "Дельта экспортирована", mlFedImported: "Дельта импортирована",
+    mlDatasets: "Датасеты", mlDsCapture: "Захватить", mlDsUpload: "Загрузить", mlDsEmpty: "Нет датасетов",
+    mlFeedback: "Обратная связь", mlFbSuccess: "Успех", mlFbFail: "Ошибка", mlFbTotal: "Всего", mlFbLatency: "Задержка",
+    mlFbNoData: "Нет данных", mlFbSend: "Отправить результат",
+    mlModelMgmt: "Управление моделью", mlModelReload: "Перезагрузить модель", mlModelParams: "Параметров",
+    mlModelAccuracy: "Точность", mlModelSamples: "Сэмплов", mlModelEngine: "Движок",
     mlTargetServer: "Целевой сервер", mlTargetServerHint: "host:port, например 1.2.3.4:8443",
     mlToken: "ML Токен", mlTokenHint: "PSK токен для авторизации",
     mlConnect: "Подключить через ML", mlConnecting: "Подключение...", mlDisconnect: "Отключить",
@@ -166,6 +184,16 @@ const i18n: Record<Lang, Record<string, string>> = {
     domainHint: "Например: steampowered.com",
     discordVpn: "Через VPN", discordDirect: "Напрямую",
     discordDesc: "VPN — приложение запускается; Напрямую — голос работает",
+    blocklist: "Блок-лист", blocklistTitle: "Блок-лист", blocklistDesc: "Заблокированные домены и приложения — трафик полностью блокируется",
+    blockDomain: "Заблокировать домен", blockApp: "Заблокировать приложение", blockKeyword: "По ключевому слову", blockIp: "Заблокировать IP/CIDR",
+    noBlocked: "Список пуст", blocked: "Заблокирован", domainBlockHint: "Например: tiktok.com",
+    keywordHint: "Например: tracker", ipHint: "Например: 1.2.3.0/24",
+    subscriptions: "Подписки", addSubscription: "Добавить подписку",
+    subName: "Название", subUrl: "URL подписки", subUrlHint: "https://server/sub/TOKEN",
+    noSubscriptions: "Нет подписок", subKeys: "ключей", subRefreshing: "Обновление...",
+    subRefresh: "Обновить", subDelete: "Удалить", subLastUpdated: "Обновлено",
+    subSelectKey: "Выбрать ключ", subRename: "Переименовать",
+    pingKey: "Пинг", pingAll: "Пинг всех", pingMs: "мс", pingTimeout: "timeout", pingRunning: "...",
   },
   en: {
     home: "Home", connections: "Connections", profiles: "Profiles", routing: "Routing", logs: "Logs", settings: "Settings", bridges: "Bridges", ml: "ML Mode",
@@ -181,6 +209,19 @@ const i18n: Record<Lang, Record<string, string>> = {
     mlAvgRtt: "Avg RTT", mlReachable: "Hosts reachable",
     mlTransportRec: "Recommended transport", mlTransportDesc: "Why",
     mlScanFirst: "Click «Analyse network» to get a transport recommendation",
+    mlTraining: "Model Training", mlTrainStart: "Start Training", mlTrainStop: "Stop",
+    mlTrainRunning: "Training...", mlTrainEpoch: "Epoch", mlTrainLoss: "Loss", mlTrainProgress: "Progress",
+    mlTrainDone: "Training complete", mlTrainFailed: "Training failed",
+    mlPortScan: "Port Scan", mlScanStart: "Scan", mlScanRunning: "Scanning...",
+    mlScanHost: "Host", mlScanPort: "Port", mlScanService: "Service", mlScanLatency: "Latency",
+    mlScanOpen: "open", mlScanClosed: "closed", mlScanNoResults: "No results",
+    mlFederated: "Federated Learning", mlFedExport: "Export Delta", mlFedImport: "Import Delta",
+    mlDatasets: "Datasets", mlDsCapture: "Capture", mlDsUpload: "Upload", mlDsEmpty: "No datasets",
+    mlFeedback: "Feedback", mlFbSuccess: "Success", mlFbFail: "Fail", mlFbTotal: "Total", mlFbLatency: "Latency",
+    mlFbNoData: "No data", mlFbSend: "Send result",
+    mlModelMgmt: "Model Management", mlModelReload: "Reload Model", mlModelParams: "Parameters",
+    mlModelAccuracy: "Accuracy", mlModelSamples: "Samples", mlModelEngine: "Engine",
+    mlFedLosses: "Loss Metrics", mlFedExported: "Delta exported", mlFedImported: "Delta imported",
     mlTargetServer: "Target server", mlTargetServerHint: "host:port, e.g. 1.2.3.4:8443",
     mlToken: "ML Token", mlTokenHint: "PSK auth token",
     mlConnect: "Connect via ML", mlConnecting: "Connecting...", mlDisconnect: "Disconnect",
@@ -218,10 +259,19 @@ const i18n: Record<Lang, Record<string, string>> = {
     domainHint: "e.g. steampowered.com",
     discordVpn: "Through VPN", discordDirect: "Direct",
     discordDesc: "VPN — app connects; Direct — voice works",
+    blocklist: "Blocklist", blocklistTitle: "Blocklist", blocklistDesc: "Blocked domains and apps — traffic is completely rejected",
+    blockDomain: "Block domain", blockApp: "Block application", blockKeyword: "By keyword", blockIp: "Block IP/CIDR",
+    noBlocked: "List is empty", blocked: "Blocked", domainBlockHint: "e.g. tiktok.com",
+    keywordHint: "e.g. tracker", ipHint: "e.g. 1.2.3.0/24",
+    subscriptions: "Subscriptions", addSubscription: "Add subscription",
+    subName: "Name", subUrl: "Subscription URL", subUrlHint: "https://server/sub/TOKEN",
+    noSubscriptions: "No subscriptions", subKeys: "keys", subRefreshing: "Refreshing...",
+    subRefresh: "Refresh", subDelete: "Delete", subLastUpdated: "Updated",
+    subSelectKey: "Use key", subRename: "Rename",
+    pingKey: "Ping", pingAll: "Ping all", pingMs: "ms", pingTimeout: "timeout", pingRunning: "...",
   },
 };
 
-/* ===================== STATE ===================== */
 let currentPage: Page = "home";
 let lang: Lang = "ru";
 let isConnected = false;
@@ -233,8 +283,14 @@ let settings: AppSettings = {
 };
 
 let profiles: Profile[] = [];
+let subscriptions: Subscription[] = [];
+let pingResults: Map<string, number | "pinging" | "timeout"> = new Map();
+let subUpdateAvailable: Set<string> = new Set();
+let subAutoCheckTimer: ReturnType<typeof setInterval> | null = null;
 let routingRules: RoutingRule[] = [];
+let blocklistRules: RoutingRule[] = [];
 let bridgeList: BridgeInfo[] = [];
+let currentFingerprint = "chrome";
 let logLines: string[] = [];
 let connectTime: number | null = null;
 let ipInfo = { ip: "—", location: "—", provider: "—" };
@@ -292,9 +348,29 @@ function genSecret(): string {
   return Array.from({ length: 16 }, () => c[Math.floor(Math.random() * c.length)]).join("");
 }
 
-/* ===================== PERSISTENCE ===================== */
 function loadProfiles(): void { try { const r = localStorage.getItem("whisp_profiles"); if (r) profiles = JSON.parse(r); } catch {/**/ } }
 function saveProfiles(): void { localStorage.setItem("whisp_profiles", JSON.stringify(profiles)); }
+
+async function loadSubscriptions(): Promise<void> {
+  try { subscriptions = await invoke<Subscription[]>("get_subscriptions"); } catch {/**/ }
+}
+
+async function autoCheckSubscriptions(): Promise<void> {
+  for (const sub of subscriptions) {
+    try {
+      const remote = await invoke<Subscription>("check_subscription_update", { id: sub.id });
+      if (remote && remote.updated !== sub.updated) {
+        subUpdateAvailable.add(sub.id);
+      }
+    } catch {/**/}
+  }
+  if (subUpdateAvailable.size > 0 && currentPage === "profiles") renderPage();
+}
+
+function startSubAutoCheck(): void {
+  if (subAutoCheckTimer) clearInterval(subAutoCheckTimer);
+  subAutoCheckTimer = setInterval(() => autoCheckSubscriptions(), 10 * 60 * 1000);
+}
 function loadLang(): void { const s = localStorage.getItem("whisp_lang"); if (s === "en" || s === "ru") lang = s; }
 function saveLang(): void { localStorage.setItem("whisp_lang", lang); }
 
@@ -316,6 +392,14 @@ async function persistRoutingRules(): Promise<void> {
   try { await invoke("save_routing_rules", { rules: routingRules }); } catch {/**/ }
 }
 
+async function loadBlocklist(): Promise<void> {
+  try { blocklistRules = await invoke<RoutingRule[]>("get_blocklist"); } catch {/**/ }
+}
+
+async function persistBlocklist(): Promise<void> {
+  try { await invoke("save_blocklist", { rules: blocklistRules }); } catch {/**/ }
+}
+
 let _appliedMlTransport = "";
 
 async function doConnect(): Promise<void> {
@@ -326,7 +410,6 @@ async function doConnect(): Promise<void> {
     isConnected = true;
     connectTime = Date.now();
     addLog("✓ " + msg);
-    // Read back the ML transport that was applied
     try { _appliedMlTransport = await invoke<string>("get_ml_transport"); } catch { _appliedMlTransport = ""; }
     const transportMsg = _appliedMlTransport
       ? (lang === "ru" ? `VPN подключён · транспорт: ${_appliedMlTransport}` : `VPN connected · transport: ${_appliedMlTransport}`)
@@ -449,12 +532,10 @@ function addLog(line: string): void {
   if (box) { box.textContent = logLines.join("\n"); box.scrollTop = box.scrollHeight; }
 }
 
-/* ===================== RENDER — INITIAL ONLY ===================== */
 function renderShell(): void {
   const app = document.getElementById("app");
   if (!app) return;
 
-  // Toast container lives on body — survives renderPage() re-renders
   if (!document.getElementById("toast-container")) {
     const tc = document.createElement("div");
     tc.id = "toast-container";
@@ -489,6 +570,7 @@ function renderNav(): void {
     { id: "connections", icon: ICONS.wifi, label: t("connections") },
     { id: "profiles", icon: ICONS.user, label: t("profiles") },
     { id: "routing", icon: routeIcon, label: t("routing") },
+    { id: "blocklist", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`, label: t("blocklist") },
     { id: "bridges", icon: ICONS.globe, label: t("bridges") },
     { id: "ml", icon: ICONS.ml, label: t("ml") },
     { id: "logs", icon: ICONS.log, label: t("logs") },
@@ -509,7 +591,6 @@ function renderNav(): void {
     <button class="lang-btn ${lang === "en" ? "active" : ""}" data-lang="en">EN</button>
   `;
 
-  // Bind nav
   document.querySelectorAll<HTMLElement>(".nav-item[data-page]").forEach(el => {
     el.addEventListener("click", () => { currentPage = el.dataset.page as Page; renderNav(); renderPage(); });
   });
@@ -526,19 +607,21 @@ function renderPage(): void {
     case "connections": main.innerHTML = renderConnections(); break;
     case "profiles": main.innerHTML = renderProfiles(); bindProfileEvents(); break;
     case "routing": main.innerHTML = renderRouting(); bindRoutingEvents(); break;
+    case "blocklist": main.innerHTML = renderBlocklist(); bindBlocklistEvents(); break;
     case "logs":
       main.innerHTML = renderLogs();
+      bindLogEvents();
       document.getElementById("btn-clear-logs")?.addEventListener("click", () => {
         logLines = [];
-        const box = document.getElementById("log-box");
-        if (box) box.textContent = t("logReady");
+        logSearch = "";
+        logFilter = "all";
+        renderPage();
       });
       break;
     case "settings": main.innerHTML = renderSettings(); bindSettingsEvents(); break;
     case "bridges": main.innerHTML = renderBridges(); bindBridgesEvents(); break;
     case "ml": main.innerHTML = renderML(); bindMLEvents(); break;
   }
-  // re-bind copy icons on any page
   document.querySelectorAll<HTMLElement>(".copy-icon[data-copy]").forEach(el => {
     el.addEventListener("click", () => {
       clipboardWrite(el.dataset.copy || "");
@@ -552,7 +635,6 @@ function updateHome(): void {
   renderPage();
 }
 
-/* ===================== TOASTS ===================== */
 function showToast(msg: string, type: "success" | "error" | "info" = "info", duration = 3500): void {
   const container = document.getElementById("toast-container");
   if (!container) return;
@@ -560,7 +642,6 @@ function showToast(msg: string, type: "success" | "error" | "info" = "info", dur
   toast.className = `toast toast-${type}`;
   toast.innerHTML = `<span class="toast-dot"></span><span class="toast-msg">${esc(msg)}</span>`;
   container.appendChild(toast);
-  // double rAF to guarantee initial state is painted before transition starts
   requestAnimationFrame(() => requestAnimationFrame(() => toast.classList.add("toast-visible")));
   setTimeout(() => {
     toast.classList.remove("toast-visible");
@@ -576,7 +657,6 @@ function tickUptime(): void {
   if (el2) el2.textContent = isConnected && connectTime ? formatDuration(Date.now() - connectTime) : "—";
 }
 
-/* ---------- HOME ---------- */
 function renderHome(): string {
   const profileName = profiles.find(p => p.key === settings.conn_key)?.name;
   const serverHost = getServerHost();
@@ -584,7 +664,6 @@ function renderHome(): string {
 
   let connectionCard: string;
   if (isConnected) {
-    // ── Connected view ──────────────────────────────────────
     connectionCard = `
       <div class="card card-connection">
         <div class="card-header">
@@ -605,7 +684,6 @@ function renderHome(): string {
         <button class="btn-connect connected" id="btn-connect">${ICONS.x} ${t("disconnect")}</button>
       </div>`;
   } else {
-    // ── Disconnected / connecting view ───────────────────────
     const dis = isConnecting;
     connectionCard = `
       <div class="card card-connection">
@@ -676,7 +754,6 @@ function bindHomeEvents(): void {
     isConnected ? await doDisconnect() : await doConnect();
   });
 
-  // Paste button — reads from clipboard via Tauri API (no browser permission dialog)
   document.getElementById("btn-paste")?.addEventListener("click", async () => {
     try {
       const text = await clipboardRead();
@@ -693,7 +770,6 @@ function bindHomeEvents(): void {
     }
   });
 
-  // Ctrl+Enter in textarea — connect shortcut
   document.getElementById("conn-key")?.addEventListener("keydown", async (ev) => {
     const e = ev as KeyboardEvent;
     if (e.key === "Enter" && e.ctrlKey) {
@@ -706,7 +782,6 @@ function bindHomeEvents(): void {
     }
   });
 
-  // Kill-switch quick toggle on home card
   document.getElementById("ks-home")?.addEventListener("change", function () {
     settings.kill_switch = (this as HTMLInputElement).checked;
     persistSettings();
@@ -716,7 +791,6 @@ function bindHomeEvents(): void {
   document.getElementById("btn-refresh-ip")?.addEventListener("click", () => fetchIpInfo());
 }
 
-/* ---------- CONNECTIONS ---------- */
 function renderConnections(): string {
   const server = getServerHost() || (settings.conn_key ? (lang === "ru" ? "зашифрован" : "encrypted") : t("notSet"));
   const uptimeStr = isConnected && connectTime ? formatDuration(Date.now() - connectTime) : "—";
@@ -770,29 +844,208 @@ function renderConnections(): string {
     </div>`;
 }
 
-/* ---------- PROFILES ---------- */
 function renderProfiles(): string {
-  const list = profiles.length === 0
+  const profileList = profiles.length === 0
     ? `<div class="empty-state"><div class="empty-icon">${ICONS.user}</div><p>${t("noProfiles")}</p></div>`
-    : profiles.map(p => `<div class="profile-card"><div class="profile-info"><span>${ICONS.user}</span><span>${esc(p.name)}</span></div>
-        <div class="profile-actions">
-          <button class="btn-use-profile" data-id="${p.id}" title="Use">${ICONS.play}</button>
-          <button class="btn-del-profile" data-id="${p.id}" title="Delete">${ICONS.x}</button>
-        </div></div>`).join("");
-  return `<div class="page-header"><h2 class="page-title">${t("profiles")}</h2><button class="btn-add-profile" id="btn-add-profile">${t("addProfile")}</button></div>${list}`;
+    : profiles.map(p => `
+        <div class="profile-card">
+          <div class="profile-info"><span>${ICONS.user}</span><span>${esc(p.name)}</span></div>
+          <div class="profile-actions">
+            <button class="btn-use-profile" data-id="${p.id}" title="${t("subSelectKey")}">${ICONS.play}</button>
+            <button class="btn-del-profile" data-id="${p.id}" title="${t("subDelete")}">${ICONS.x}</button>
+          </div>
+        </div>`).join("");
+
+  const subList = subscriptions.length === 0
+    ? `<div class="empty-state"><p>${t("noSubscriptions")}</p></div>`
+    : subscriptions.map(s => {
+        const keyRows = s.keys.map((k, i) => {
+          const pr = pingResults.get(`${s.id}:${i}`);
+          const pingLabel = pr === "pinging" ? `<span class="ping-val pinging">${t("pingRunning")}</span>`
+            : pr === "timeout" ? `<span class="ping-val timeout">${t("pingTimeout")}</span>`
+            : pr !== undefined ? `<span class="ping-val ok">${pr}${t("pingMs")}</span>`
+            : "";
+          return `
+          <div class="sub-key-row">
+            <span class="sub-key-val" title="${esc(k)}">${esc(k.length > 50 ? k.slice(0, 50) + "…" : k)}</span>
+            ${pingLabel}
+            <button class="btn-ping-key" data-sub="${s.id}" data-idx="${i}" data-key="${esc(k)}" title="${t("pingKey")}">${ICONS.ping}</button>
+            <button class="btn-use-sub-key" data-sub="${s.id}" data-idx="${i}">${ICONS.play}</button>
+          </div>`;
+        }).join("");
+        const updLabel = s.updated ? `<span class="sub-meta">${t("subLastUpdated")}: ${s.updated.slice(0, 10)}</span>` : "";
+        return `
+          <div class="profile-card sub-card">
+            <div class="profile-info">
+              <span>${ICONS.link}</span>
+              <span>${esc(s.name || s.url)}</span>
+              <span class="sub-meta">${s.keys.length} ${t("subKeys")}</span>
+              ${updLabel}
+            </div>
+            <div class="profile-actions">
+              <button class="btn-ping-all-sub" data-id="${s.id}" title="${t("pingAll")}">${ICONS.ping}</button>
+              <button class="btn-rename-sub" data-id="${s.id}" title="${t("subRename")}">${ICONS.pencil}</button>
+              <button class="btn-refresh-sub" data-id="${s.id}" title="${t("subRefresh")}">${subUpdateAvailable.has(s.id) ? '<span class="sub-update-dot"></span>' : ""}${ICONS.refresh}</button>
+              <button class="btn-del-sub" data-id="${s.id}" title="${t("subDelete")}">${ICONS.x}</button>
+            </div>
+            ${s.keys.length > 0 ? `<div class="sub-keys">${keyRows}</div>` : ""}
+          </div>`;
+      }).join("");
+
+  return `
+    <div class="page-header">
+      <h2 class="page-title">${t("profiles")}</h2>
+      <button class="btn-add-profile" id="btn-add-profile">${t("addProfile")}</button>
+    </div>
+    ${profileList}
+    <div class="section-header">
+      <span class="section-title">${t("subscriptions")}</span>
+      <button class="btn-add-profile" id="btn-add-sub">${t("addSubscription")}</button>
+    </div>
+    ${subList}`;
 }
 
 function bindProfileEvents(): void {
   document.getElementById("btn-add-profile")?.addEventListener("click", () => showProfileModal());
+
   document.querySelectorAll<HTMLElement>(".btn-use-profile").forEach(el => {
-    el.addEventListener("click", () => { const p = profiles.find(x => x.id === el.dataset.id); if (p) { settings.conn_key = p.key; persistSettings(); currentPage = "home"; renderNav(); renderPage(); } });
+    el.addEventListener("click", () => {
+      const p = profiles.find(x => x.id === el.dataset.id);
+      if (p) { settings.conn_key = p.key; persistSettings(); currentPage = "home"; renderNav(); renderPage(); }
+    });
   });
   document.querySelectorAll<HTMLElement>(".btn-del-profile").forEach(el => {
     el.addEventListener("click", () => { profiles = profiles.filter(x => x.id !== el.dataset.id); saveProfiles(); renderPage(); });
   });
+
+  document.getElementById("btn-add-sub")?.addEventListener("click", () => showSubModal());
+
+  document.querySelectorAll<HTMLElement>(".btn-ping-key").forEach(el => {
+    el.addEventListener("click", async () => {
+      const subId = el.dataset.sub!;
+      const idx = parseInt(el.dataset.idx ?? "0", 10);
+      const key = el.dataset.key!;
+      const mapKey = `${subId}:${idx}`;
+      pingResults.set(mapKey, "pinging");
+      renderPage();
+      try {
+        const ms = await invoke<number>("ping_key", { key });
+        pingResults.set(mapKey, ms);
+      } catch {
+        pingResults.set(mapKey, "timeout");
+      }
+      renderPage();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>(".btn-ping-all-sub").forEach(el => {
+    el.addEventListener("click", async () => {
+      const subId = el.dataset.id!;
+      const sub = subscriptions.find(s => s.id === subId);
+      if (!sub) return;
+      sub.keys.forEach((_, i) => pingResults.set(`${subId}:${i}`, "pinging"));
+      renderPage();
+      await Promise.all(sub.keys.map(async (k, i) => {
+        try {
+          const ms = await invoke<number>("ping_key", { key: k });
+          pingResults.set(`${subId}:${i}`, ms);
+        } catch {
+          pingResults.set(`${subId}:${i}`, "timeout");
+        }
+      }));
+      renderPage();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>(".btn-rename-sub").forEach(el => {
+    el.addEventListener("click", () => {
+      const subId = el.dataset.id!;
+      const sub = subscriptions.find(s => s.id === subId);
+      if (!sub) return;
+      const newName = prompt(t("subName"), sub.name || sub.url);
+      if (newName === null) return;
+      invoke("rename_subscription", { id: subId, name: newName.trim() }).then(() => {
+        sub.name = newName.trim();
+        renderPage();
+      }).catch(() => { });
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>(".btn-refresh-sub").forEach(el => {
+    el.addEventListener("click", async () => {
+      const id = el.dataset.id!;
+      (el as HTMLButtonElement).disabled = true;
+      el.classList.add("spinning");
+      try {
+        const updated = await invoke<Subscription>("refresh_subscription", { id });
+        subscriptions = subscriptions.map(s => s.id === id ? updated : s);
+        subUpdateAvailable.delete(id);
+        showToast(lang === "ru" ? "Подписка обновлена" : "Subscription updated", "success");
+      } catch { showToast(lang === "ru" ? "Ошибка обновления" : "Update failed", "error"); }
+      renderPage();
+    });
+  });
+  document.querySelectorAll<HTMLElement>(".btn-del-sub").forEach(el => {
+    el.addEventListener("click", async () => {
+      const id = el.dataset.id!;
+      await invoke("delete_subscription", { id }).catch(() => {/**/});
+      subscriptions = subscriptions.filter(s => s.id !== id);
+      renderPage();
+    });
+  });
+  document.querySelectorAll<HTMLElement>(".btn-use-sub-key").forEach(el => {
+    el.addEventListener("click", () => {
+      const sub = subscriptions.find(s => s.id === el.dataset.sub);
+      const idx = parseInt(el.dataset.idx ?? "0", 10);
+      if (sub && sub.keys[idx]) {
+        settings.conn_key = sub.keys[idx];
+        persistSettings();
+        currentPage = "home";
+        renderNav();
+        renderPage();
+      }
+    });
+  });
 }
 
-/* ---------- ROUTING ---------- */
+function showSubModal(): void {
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay";
+  ov.innerHTML = `
+    <div class="modal">
+      <h3>${t("addSubscription")}</h3>
+      <label>${t("subName")}</label>
+      <input class="modal-input" id="sub-modal-name" placeholder="${t("subName")}" />
+      <label>${t("subUrl")}</label>
+      <input class="modal-input" id="sub-modal-url" placeholder="${t("subUrlHint")}" />
+      <div class="modal-err" id="sub-modal-err" style="color:var(--danger,#e55);display:none"></div>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="sub-modal-cancel">${t("cancel")}</button>
+        <button class="btn-primary" id="sub-modal-save">${t("save")}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  document.getElementById("sub-modal-cancel")?.addEventListener("click", () => ov.remove());
+  document.getElementById("sub-modal-save")?.addEventListener("click", async () => {
+    const name = (document.getElementById("sub-modal-name") as HTMLInputElement).value.trim();
+    const url = (document.getElementById("sub-modal-url") as HTMLInputElement).value.trim();
+    const errEl = document.getElementById("sub-modal-err")!;
+    if (!url) { errEl.textContent = t("subUrlHint"); errEl.style.display = ""; return; }
+    const btn = document.getElementById("sub-modal-save") as HTMLButtonElement;
+    btn.disabled = true; btn.textContent = t("subRefreshing");
+    try {
+      const entry = await invoke<Subscription>("add_subscription", { name, url });
+      subscriptions.push(entry);
+      ov.remove();
+      if (currentPage === "profiles") renderPage();
+    } catch (e) {
+      errEl.textContent = String(e);
+      errEl.style.display = "";
+      btn.disabled = false; btn.textContent = t("save");
+    }
+  });
+}
+
 const DISCORD_RULE_ID = "discord-builtin";
 const DISCORD_UPDATE_RULE_ID = "discord-update-builtin";
 
@@ -805,14 +1058,12 @@ function getDiscordRule(): RoutingRule | undefined {
 }
 
 async function setDiscordMode(action: "PROXY" | "DIRECT"): Promise<void> {
-  // Discord.exe
   const main = getDiscordRule();
   if (main) {
     main.action = action;
   } else {
     routingRules.push({ id: DISCORD_RULE_ID, kind: "process", value: "Discord.exe", action });
   }
-  // Update.exe (Discord updater)
   const upd = routingRules.find(r => r.id === DISCORD_UPDATE_RULE_ID ||
     (r.kind === "process" && r.value.toLowerCase() === "update.exe"));
   if (upd) {
@@ -831,7 +1082,6 @@ function renderRouting(): string {
   const discordRule = getDiscordRule();
   const discordAction = discordRule?.action ?? "PROXY";
 
-  // Exclude Discord-managed rules from generic list — they have their own card
   const discordIds = new Set([DISCORD_RULE_ID, DISCORD_UPDATE_RULE_ID]);
   const discordProcs = new Set(["discord.exe", "update.exe"]);
   const userRules = routingRules.filter(r =>
@@ -907,7 +1157,6 @@ function renderRouting(): string {
 let _selectedExe = "";
 
 function bindRoutingEvents(): void {
-  // Discord mode toggle
   document.querySelectorAll<HTMLElement>("#discord-mode-pills .pill-btn").forEach(el => {
     el.addEventListener("click", async () => {
       const action = el.dataset.act as "PROXY" | "DIRECT";
@@ -917,7 +1166,6 @@ function bindRoutingEvents(): void {
     });
   });
 
-  // Domain action pills
   document.querySelectorAll<HTMLElement>("#rule-domain-action .pill-btn").forEach(el => {
     el.addEventListener("click", () => {
       document.querySelectorAll("#rule-domain-action .pill-btn").forEach(b => b.classList.remove("active"));
@@ -925,7 +1173,6 @@ function bindRoutingEvents(): void {
     });
   });
 
-  // Process action pills
   document.querySelectorAll<HTMLElement>("#rule-process-action .pill-btn").forEach(el => {
     el.addEventListener("click", () => {
       document.querySelectorAll("#rule-process-action .pill-btn").forEach(b => b.classList.remove("active"));
@@ -933,10 +1180,9 @@ function bindRoutingEvents(): void {
     });
   });
 
-  // Add domain rule
   document.getElementById("btn-add-domain")?.addEventListener("click", async () => {
     const input = document.getElementById("rule-domain-input") as HTMLInputElement;
-    const domain = input.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    const domain = input.value.trim().replace(/^https?:\/\//, "");
     if (!domain) return;
     const action = (document.querySelector("#rule-domain-action .pill-btn.active") as HTMLElement)?.dataset.act || "DIRECT";
     routingRules.push({ id: Date.now().toString(), kind: "domain", value: domain, action: action as "DIRECT" | "PROXY" });
@@ -945,7 +1191,6 @@ function bindRoutingEvents(): void {
     renderPage();
   });
 
-  // Browse exe via HTML file input
   document.getElementById("rule-exe-input")?.addEventListener("change", (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (file) {
@@ -955,7 +1200,6 @@ function bindRoutingEvents(): void {
     }
   });
 
-  // Add process rule
   document.getElementById("btn-add-process")?.addEventListener("click", async () => {
     if (!_selectedExe) return;
     const action = (document.querySelector("#rule-process-action .pill-btn.active") as HTMLElement)?.dataset.act || "DIRECT";
@@ -965,7 +1209,6 @@ function bindRoutingEvents(): void {
     renderPage();
   });
 
-  // Delete rule
   document.querySelectorAll<HTMLElement>(".btn-del-rule").forEach(el => {
     el.addEventListener("click", async () => {
       routingRules = routingRules.filter(r => r.id !== el.dataset.id);
@@ -975,9 +1218,152 @@ function bindRoutingEvents(): void {
   });
 }
 
-/* ---------- LOGS ---------- */
+let _blockSelectedExe = "";
+
+function renderBlocklist(): string {
+  const rows = blocklistRules.length === 0
+    ? `<div class="empty-state"><p>${t("noBlocked")}</p></div>`
+    : blocklistRules.map(r => {
+        const kindLabel = r.kind === "domain" ? t("domain")
+          : r.kind === "domain-keyword" ? t("blockKeyword")
+          : r.kind === "ip" ? "IP"
+          : t("app");
+        const displayVal = r.kind === "process" ? (r.value.split(/[\\/]/).pop() || r.value) : r.value;
+        return `<div class="rule-row" data-id="${r.id}">
+          <span class="rule-kind">${kindLabel}</span>
+          <span class="rule-value" title="${esc(r.value)}">${esc(displayVal)}</span>
+          <span class="badge-off" style="background:var(--danger,#e74c3c);color:#fff">${t("blocked")}</span>
+          <button class="btn-del-rule btn-del-block" data-id="${r.id}">${ICONS.x}</button>
+        </div>`;
+      }).join("");
+
+  return `
+    <div class="page-header">
+      <h2 class="page-title">${t("blocklistTitle")}</h2>
+    </div>
+    <p class="page-desc">${t("blocklistDesc")}</p>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header"><span class="card-title">${t("blockDomain")}</span></div>
+      <div class="rule-add-row">
+        <input type="text" id="block-domain-input" placeholder="${t("domainBlockHint")}" class="rule-input"/>
+        <button class="btn-sm" id="btn-block-domain">+</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header"><span class="card-title">${t("blockKeyword")}</span></div>
+      <div class="rule-add-row">
+        <input type="text" id="block-keyword-input" placeholder="${t("keywordHint")}" class="rule-input"/>
+        <button class="btn-sm" id="btn-block-keyword">+</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header"><span class="card-title">${t("blockApp")}</span></div>
+      <div class="rule-add-row">
+        <label class="btn-sm" id="btn-block-browse-exe" style="cursor:pointer">
+          ${lang === "ru" ? "Выбрать .exe" : "Browse .exe"}
+          <input type="file" id="block-exe-input" accept=".exe" style="display:none"/>
+        </label>
+        <span class="rule-exe-display" id="block-exe-display">—</span>
+        <button class="btn-sm" id="btn-block-process">+</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header"><span class="card-title">${t("blockIp")}</span></div>
+      <div class="rule-add-row">
+        <input type="text" id="block-ip-input" placeholder="${t("ipHint")}" class="rule-input"/>
+        <button class="btn-sm" id="btn-block-ip">+</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">${t("blocklist")}</span></div>
+      <div id="block-rules-list">${rows}</div>
+    </div>`;
+}
+
+function bindBlocklistEvents(): void {
+  document.getElementById("btn-block-domain")?.addEventListener("click", async () => {
+    const input = document.getElementById("block-domain-input") as HTMLInputElement;
+    const domain = input.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (!domain) return;
+    blocklistRules.push({ id: Date.now().toString(), kind: "domain", value: domain, action: "REJECT" });
+    await persistBlocklist();
+    input.value = "";
+    renderPage();
+  });
+
+  document.getElementById("btn-block-keyword")?.addEventListener("click", async () => {
+    const input = document.getElementById("block-keyword-input") as HTMLInputElement;
+    const keyword = input.value.trim();
+    if (!keyword) return;
+    blocklistRules.push({ id: Date.now().toString(), kind: "domain-keyword", value: keyword, action: "REJECT" });
+    await persistBlocklist();
+    input.value = "";
+    renderPage();
+  });
+
+  document.getElementById("block-exe-input")?.addEventListener("change", (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (file) {
+      _blockSelectedExe = file.name;
+      const display = document.getElementById("block-exe-display");
+      if (display) display.textContent = file.name;
+    }
+  });
+
+  document.getElementById("btn-block-process")?.addEventListener("click", async () => {
+    if (!_blockSelectedExe) return;
+    blocklistRules.push({ id: Date.now().toString(), kind: "process", value: _blockSelectedExe, action: "REJECT" });
+    await persistBlocklist();
+    _blockSelectedExe = "";
+    renderPage();
+  });
+
+  document.getElementById("btn-block-ip")?.addEventListener("click", async () => {
+    const input = document.getElementById("block-ip-input") as HTMLInputElement;
+    const ip = input.value.trim();
+    if (!ip) return;
+    blocklistRules.push({ id: Date.now().toString(), kind: "ip", value: ip, action: "REJECT" });
+    await persistBlocklist();
+    input.value = "";
+    renderPage();
+  });
+
+  document.querySelectorAll<HTMLElement>(".btn-del-block").forEach(el => {
+    el.addEventListener("click", async () => {
+      blocklistRules = blocklistRules.filter(r => r.id !== el.dataset.id);
+      await persistBlocklist();
+      renderPage();
+    });
+  });
+}
+
+let logFilter = "all";
+let logSearch = "";
+
 function renderLogs(): string {
-  const txt = logLines.length > 0 ? esc(logLines.join("\n")) : t("logReady");
+  const filtered = logLines.filter(line => {
+    if (logFilter !== "all") {
+      const level = logFilter.toUpperCase();
+      if (!line.toUpperCase().includes(`[${level}]`) && !line.toUpperCase().includes(`"level":"${level}"`)) return false;
+    }
+    if (logSearch && !line.toLowerCase().includes(logSearch.toLowerCase())) return false;
+    return true;
+  });
+  const colorized = filtered.map(line => {
+    let cls = "log-line";
+    const upper = line.toUpperCase();
+    if (upper.includes("[ERROR]") || upper.includes('"level":"error"')) cls += " log-error";
+    else if (upper.includes("[WARN]") || upper.includes('"level":"warn"')) cls += " log-warn";
+    else if (upper.includes("[INFO]") || upper.includes('"level":"info"')) cls += " log-info";
+    else if (upper.includes("[DEBUG]") || upper.includes('"level":"debug"')) cls += " log-debug";
+    return `<div class="${cls}">${esc(line)}</div>`;
+  }).join("");
+  const txt = colorized || `<div class="log-line log-info">${t("logReady")}</div>`;
   return `
     <div class="page-header">
       <h2 class="page-title">${t("systemLog")}</h2>
@@ -986,10 +1372,51 @@ function renderLogs(): string {
         <button class="btn-sm" id="btn-clear-logs">${t("clearLogs")}</button>
       </div>
     </div>
+    <div class="log-toolbar">
+      <input type="text" class="log-search" id="log-search" placeholder="${lang === "ru" ? "Поиск в логах..." : "Search logs..."}" value="${esc(logSearch)}"/>
+      <div class="pill-group">
+        <button class="pill-btn log-filter-btn ${logFilter === "all" ? "active" : ""}" data-filter="all">${lang === "ru" ? "Все" : "All"}</button>
+        <button class="pill-btn log-filter-btn ${logFilter === "error" ? "active" : ""}" data-filter="error">Error</button>
+        <button class="pill-btn log-filter-btn ${logFilter === "warn" ? "active" : ""}" data-filter="warn">Warn</button>
+        <button class="pill-btn log-filter-btn ${logFilter === "info" ? "active" : ""}" data-filter="info">Info</button>
+        <button class="pill-btn log-filter-btn ${logFilter === "debug" ? "active" : ""}" data-filter="debug">Debug</button>
+      </div>
+      <span class="log-count">${filtered.length}/${logLines.length}</span>
+    </div>
     <div class="log-box" id="log-box">${txt}</div>`;
 }
 
-/* ---------- SETTINGS ---------- */
+function bindLogEvents(): void {
+  document.getElementById("log-search")?.addEventListener("input", function () {
+    logSearch = (this as HTMLInputElement).value;
+    const box = document.getElementById("log-box");
+    if (box) { const tmp = document.createElement("div"); tmp.innerHTML = renderLogs(); const newBox = tmp.querySelector("#log-box"); if (newBox) box.innerHTML = newBox.innerHTML; }
+    const cnt = document.querySelector(".log-count");
+    if (cnt) { const f = logLines.filter(l => { if (logFilter !== "all" && !l.toUpperCase().includes(`[${logFilter.toUpperCase()}]`)) return false; if (logSearch && !l.toLowerCase().includes(logSearch.toLowerCase())) return false; return true; }); cnt.textContent = `${f.length}/${logLines.length}`; }
+  });
+  document.querySelectorAll<HTMLElement>(".log-filter-btn").forEach(btn => btn.addEventListener("click", () => {
+    logFilter = btn.dataset.filter || "all";
+    renderPage();
+  }));
+}
+
+function getFPDescription(fp: string): string {
+  const descs: Record<string, [string, string]> = {
+    chrome: ["Chrome — самый распространённый, рекомендуется", "Chrome — most common, recommended"],
+    chrome_120: ["Chrome 120 — конкретная версия", "Chrome 120 — specific version"],
+    chrome_115: ["Chrome 115 — конкретная версия", "Chrome 115 — specific version"],
+    firefox: ["Firefox — второй по популярности", "Firefox — second most popular"],
+    firefox_120: ["Firefox 120 — конкретная версия", "Firefox 120 — specific version"],
+    safari: ["Safari — macOS/iOS браузер Apple", "Safari — Apple macOS/iOS browser"],
+    ios: ["iOS Safari — мобильный фингерпринт", "iOS Safari — mobile fingerprint"],
+    android: ["Android OkHttp — мобильный клиент", "Android OkHttp — mobile client"],
+    edge: ["Microsoft Edge — на базе Chromium", "Microsoft Edge — Chromium-based"],
+    random: ["Случайный фингерпринт каждое подключение", "Random fingerprint per connection"],
+  };
+  const d = descs[fp];
+  return d ? d[lang === "ru" ? 0 : 1] : "";
+}
+
 function renderSettings(): string {
   return `<div class="page-header"><h2 class="page-title">${t("settings")}</h2></div>
     <div class="settings-section">
@@ -1016,6 +1443,24 @@ function renderSettings(): string {
       <div class="setting-row"><span class="setting-label">${t("authTip")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-authtip" ${settings.auth_tip ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
       <div class="setting-row"><span class="setting-label">${t("config")}</span><div class="setting-value"><button class="btn-sm" id="btn-open-config">${t("open")}</button></div></div>
       <div class="setting-row"><span class="setting-label">${t("update")}</span><div class="setting-value"><button class="btn-sm" id="btn-open-repo">${t("openRepo")}</button><button class="btn-sm" id="btn-check-updates">${t("checkUpdates")}</button></div></div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">${lang === "ru" ? "TLS фингерпринт" : "TLS Fingerprint"}</div>
+      <div class="setting-row"><span class="setting-label">${lang === "ru" ? "Браузер" : "Browser"}</span><div class="setting-value">
+        <select id="set-fingerprint" class="setting-select">
+          <option value="chrome" ${currentFingerprint === "chrome" ? "selected" : ""}>Chrome Auto</option>
+          <option value="chrome_120" ${currentFingerprint === "chrome_120" ? "selected" : ""}>Chrome 120</option>
+          <option value="chrome_115" ${currentFingerprint === "chrome_115" ? "selected" : ""}>Chrome 115</option>
+          <option value="firefox" ${currentFingerprint === "firefox" ? "selected" : ""}>Firefox Auto</option>
+          <option value="firefox_120" ${currentFingerprint === "firefox_120" ? "selected" : ""}>Firefox 120</option>
+          <option value="safari" ${currentFingerprint === "safari" ? "selected" : ""}>Safari Auto</option>
+          <option value="ios" ${currentFingerprint === "ios" ? "selected" : ""}>iOS Safari</option>
+          <option value="android" ${currentFingerprint === "android" ? "selected" : ""}>Android OkHttp</option>
+          <option value="edge" ${currentFingerprint === "edge" ? "selected" : ""}>Edge Auto</option>
+          <option value="random" ${currentFingerprint === "random" ? "selected" : ""}>${lang === "ru" ? "Случайный" : "Random"}</option>
+        </select>
+      </div></div>
+      <div class="setting-row fp-desc"><span class="setting-label">${lang === "ru" ? "Описание" : "Description"}</span><span class="setting-value fp-desc-text" id="fp-desc">${getFPDescription(currentFingerprint)}</span></div>
     </div>`;
 }
 
@@ -1049,9 +1494,14 @@ function bindSettingsEvents(): void {
       showToast(lang === "ru" ? "Не удалось проверить обновления" : "Update check failed", "error", 2500);
     }
   });
+  (document.getElementById("set-fingerprint") as HTMLSelectElement)?.addEventListener("change", function () {
+    currentFingerprint = this.value;
+    const desc = document.getElementById("fp-desc");
+    if (desc) desc.textContent = getFPDescription(currentFingerprint);
+    showToast(lang === "ru" ? `Фингерпринт: ${this.value}` : `Fingerprint: ${this.value}`, "success", 2000);
+  });
 }
 
-/* ---------- BRIDGES ---------- */
 let _selectedBridge: BridgeInfo | null = null;
 
 function _mlScoreColor(score: number): string {
@@ -1113,17 +1563,15 @@ function renderBridges(): string {
     </div>`;
 }
 
-// Visible latitude range: crop poles to avoid squashed look
 const LAT_MAX = 80;
 const LAT_MIN = -58;
-const LAT_RANGE = LAT_MAX - LAT_MIN; // 138°
+const LAT_RANGE = LAT_MAX - LAT_MIN;
 
 function _drawBridgeMap(bridges: BridgeInfo[], selected: BridgeInfo | null): void {
   const canvas = document.getElementById("bridge-map-canvas") as HTMLCanvasElement | null;
   if (!canvas) return;
   const wrap = canvas.parentElement!;
   const W = wrap.clientWidth || 600;
-  // Aspect ratio derived from visible lon/lat range: 360 / 138 ≈ 2.6
   const H = Math.round(W / (360 / LAT_RANGE));
   const dpr = window.devicePixelRatio || 1;
   canvas.width = W * dpr;
@@ -1137,7 +1585,6 @@ function _drawBridgeMap(bridges: BridgeInfo[], selected: BridgeInfo | null): voi
   ctx.fillStyle = "#080c14";
   ctx.fillRect(0, 0, W, H);
 
-  // Clip to canvas bounds so land polygons extending beyond crop don't render
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, W, H);
@@ -1146,12 +1593,9 @@ function _drawBridgeMap(bridges: BridgeInfo[], selected: BridgeInfo | null): voi
   const lonX = (lon: number) => ((lon + 180) / 360) * W;
   const latY = (lat: number) => ((LAT_MAX - lat) / LAT_RANGE) * H;
 
-  // Build Path2D from Natural Earth GeoJSON
   function buildPath(geom: any): Path2D {
     const p = new Path2D();
     const drawRing = (ring: number[][]) => {
-      // Split path at antimeridian crossings (|Δlon| > 180) to avoid
-      // horizontal lines across the whole map (e.g. Russia/Chukotka).
       for (let i = 0; i < ring.length; i++) {
         const [lon, lat] = ring[i];
         if (i === 0) {
@@ -1159,7 +1603,7 @@ function _drawBridgeMap(bridges: BridgeInfo[], selected: BridgeInfo | null): voi
         } else {
           const prevLon = ring[i - 1][0];
           if (Math.abs(lon - prevLon) > 180) {
-            p.moveTo(lonX(lon), latY(lat)); // start new sub-path after crossing
+            p.moveTo(lonX(lon), latY(lat));
           } else {
             p.lineTo(lonX(lon), latY(lat));
           }
@@ -1221,7 +1665,6 @@ function _drawBridgeMap(bridges: BridgeInfo[], selected: BridgeInfo | null): voi
       ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2); ctx.stroke();
     }
 
-    // Label: name (if set) or city, drawn below the dot
     const label = b.name || b.city || "";
     if (label) {
       ctx.save();
@@ -1279,32 +1722,28 @@ function bindBridgesEvents(): void {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       bridgeList = (Array.isArray(data) ? data : (data.bridges || [])) as BridgeInfo[];
-      // Compute distance from user to each bridge (km), if user location known.
       if (userLat !== 0 || userLon !== 0) {
         bridgeList.forEach(b => {
           if (b.lat || b.lon) b.distance_km = haversineKm(userLat, userLon, b.lat, b.lon);
         });
       }
-      // Ask ML server to score/rank bridges (best-effort, silent if unavailable)
       if (_mlStatus && bridgeList.length > 0) {
         try {
           const ranked = await invoke<string>("ml_rank_bridges", {
             bridgesJson: JSON.stringify(bridgeList),
           });
           const rankedList = JSON.parse(ranked) as BridgeInfo[];
-          // Merge ml_score + ml_reason back into bridgeList
           const scoreMap = new Map(rankedList.map(b => [b.id, b]));
           bridgeList = bridgeList.map(b => {
             const r = scoreMap.get(b.id);
             return r ? { ...b, ml_score: r.ml_score, ml_reason: r.ml_reason } : b;
           });
-          // Sort alive bridges by ML score descending
           bridgeList.sort((a, b) => {
             if (a.alive !== b.alive) return a.alive ? -1 : 1;
             return (b.ml_score ?? 0) - (a.ml_score ?? 0);
           });
           addLog("✦ ML ranked " + bridgeList.length + " bridges");
-        } catch { /* ML unavailable — keep original order */ }
+        } catch { }
       }
     } catch { bridgeList = []; }
 
@@ -1383,7 +1822,6 @@ function bindBridgesEvents(): void {
           return;
         }
       }
-      // click outside — close popup
       _hideBridgePopup();
     });
   }
@@ -1429,7 +1867,6 @@ async function connectToBridge(b: BridgeInfo): Promise<void> {
   }
 }
 
-/* ---------- ML MODE ---------- */
 let _mlStatus = false;
 let _mlBinaryExists = false;
 let _mlLogs = "";
@@ -1437,12 +1874,22 @@ let _mlLogsInterval: ReturnType<typeof setInterval> | null = null;
 let _mlNetworkAnalysis: MLNetworkAnalysis | null = null;
 let _mlTransportRec: MLTransportRecommendation | null = null;
 let _mlAnalyzing = false;
-let _mlTargetServer = ""; // host:port entered by user on ML page, persisted in localStorage
-let _mlToken = "";        // PSK auth token, persisted in localStorage
+let _mlTargetServer = "";
+let _mlToken = "";
 let _mlConnecting = false;
+const _mlEndpoint = localStorage.getItem("ml_endpoint") || "https://127.0.0.1:8000";
+let _mlTraining = false;
+let _mlTrainProgress = 0;
+let _mlTrainEpoch = 0;
+let _mlTrainLoss = 0;
+let _mlTrainStatus = "";
+let _mlScanResults: {host: string; port: number; open: boolean; service: string; latency: number}[] = [];
+let _mlScanning = false;
+let _mlDatasets: {name: string; size: number; modified: number}[] = [];
+let _mlFeedbackStats: Record<string, {success: number; fail: number; total: number; total_latency: number; count: number}> = {};
+let _mlModelInfo: {accuracy: number; parameters: number; samples: number; engine: string} | null = null;
 
 async function refreshMLState(): Promise<void> {
-  // get_ml_status checks subprocess AND does HTTPS health check (accepts self-signed cert)
   try { _mlStatus = await invoke<boolean>("get_ml_status"); } catch { _mlStatus = false; }
   try { _mlBinaryExists = await invoke<boolean>("ml_binary_exists"); } catch { _mlBinaryExists = false; }
   try { _mlLogs = await invoke<string>("get_ml_logs"); } catch { _mlLogs = ""; }
@@ -1465,7 +1912,6 @@ function renderML(): string {
   const modeText    = _mlStatus ? t("mlFallbackOff") : t("mlFallbackOn");
   const modeClass   = _mlStatus ? "badge-on" : "badge-off";
 
-  /* ── Network analysis card ─────────────────────────── */
   let analysisCard: string;
   if (_mlNetworkAnalysis) {
     const a = _mlNetworkAnalysis;
@@ -1519,7 +1965,7 @@ function renderML(): string {
       </div>
       <div class="info-row">
         <span class="info-label">${t("mlEndpoint")}</span>
-        <span class="info-value" style="font-family:monospace;font-size:12px">https://127.0.0.1:8000</span>
+        <span class="info-value" style="font-family:monospace;font-size:12px">${_mlEndpoint}</span>
       </div>
       <div class="info-row" id="ml-no-binary-row" style="${!_mlBinaryExists && !_mlStatus ? "" : "display:none"}"><span style="color:#f87171;font-size:12px">${t("mlNoBinary")}</span></div>
       <div style="display:flex;gap:8px;margin-top:12px">
@@ -1552,6 +1998,109 @@ function renderML(): string {
 
     ${analysisCard}
 
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header">
+        <span class="card-title">${t("mlPortScan")}</span>
+        <button class="btn-sm" id="btn-ml-scan" ${_mlScanning || !_mlStatus ? "disabled" : ""}>${_mlScanning ? t("mlScanRunning") : t("mlScanStart")}</button>
+      </div>
+      ${_mlScanResults.length > 0 ? `
+        <div class="scan-table" style="font-size:12px;margin-top:8px">
+          <div class="scan-row scan-header" style="display:flex;gap:8px;padding:4px 0;opacity:0.6;border-bottom:1px solid rgba(255,255,255,0.1)">
+            <span style="flex:2">${t("mlScanHost")}</span>
+            <span style="flex:1">${t("mlScanPort")}</span>
+            <span style="flex:2">${t("mlScanService")}</span>
+            <span style="flex:1">${t("mlScanLatency")}</span>
+          </div>
+          ${_mlScanResults.map(r => `
+            <div class="scan-row" style="display:flex;gap:8px;padding:3px 0;font-family:monospace">
+              <span style="flex:2">${esc(r.host)}</span>
+              <span style="flex:1"><span class="${r.open ? "badge-on" : "badge-off"}" style="font-size:11px">${r.port}</span></span>
+              <span style="flex:2">${esc(r.service)}</span>
+              <span style="flex:1">${r.latency > 0 ? r.latency + " ms" : "—"}</span>
+            </div>
+          `).join("")}
+        </div>` : `<div class="empty-state" style="padding:12px 0"><p style="opacity:0.4">${t("mlScanNoResults")}</p></div>`}
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header">
+        <span class="card-title">${t("mlTraining")}</span>
+        <button class="btn-sm" id="btn-ml-train" ${!_mlStatus ? "disabled" : ""}>${_mlTraining ? t("mlTrainStop") : t("mlTrainStart")}</button>
+      </div>
+      ${_mlTraining ? `
+        <div style="margin-top:8px">
+          <div class="info-row"><span class="info-label">${t("mlTrainEpoch")}</span><span class="info-value" id="ml-train-epoch">${_mlTrainEpoch}</span></div>
+          <div class="info-row"><span class="info-label">${t("mlTrainLoss")}</span><span class="info-value" id="ml-train-loss">${_mlTrainLoss.toFixed(6)}</span></div>
+          <div class="info-row"><span class="info-label">${t("mlTrainProgress")}</span><span class="info-value" id="ml-train-pct">${_mlTrainProgress}%</span></div>
+          <div style="margin-top:8px;height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden">
+            <div id="ml-train-bar" style="height:100%;width:${_mlTrainProgress}%;background:var(--accent);transition:width 0.3s"></div>
+          </div>
+        </div>` : `
+        <div class="empty-state" style="padding:12px 0"><p style="opacity:0.4">${_mlTrainStatus || (lang === "ru" ? "Нажмите чтобы начать тренировку" : "Click to start training")}</p></div>`}
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header"><span class="card-title">${t("mlFederated")}</span></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn-sm" id="btn-ml-fed-export" ${!_mlStatus ? "disabled" : ""}>${t("mlFedExport")}</button>
+        <button class="btn-sm" id="btn-ml-fed-import" ${!_mlStatus ? "disabled" : ""}>${t("mlFedImport")}</button>
+        <button class="btn-sm" id="btn-ml-fed-losses" ${!_mlStatus ? "disabled" : ""}>${t("mlFedLosses")}</button>
+      </div>
+      <div id="ml-fed-output" style="margin-top:8px;font-size:12px;font-family:monospace;max-height:150px;overflow-y:auto"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header">
+        <span class="card-title">${t("mlModelMgmt")}</span>
+        <button class="btn-sm" id="btn-ml-model-reload" ${!_mlStatus ? "disabled" : ""}>${t("mlModelReload")}</button>
+      </div>
+      ${_mlModelInfo ? `
+        <div class="info-row"><span class="info-label">${t("mlModelEngine")}</span><span class="info-value"><span class="badge-on">${esc(_mlModelInfo.engine)}</span></span></div>
+        <div class="info-row"><span class="info-label">${t("mlModelAccuracy")}</span><span class="info-value">${(_mlModelInfo.accuracy * 100).toFixed(1)}%</span></div>
+        <div class="info-row"><span class="info-label">${t("mlModelParams")}</span><span class="info-value">${_mlModelInfo.parameters.toLocaleString()}</span></div>
+        <div class="info-row"><span class="info-label">${t("mlModelSamples")}</span><span class="info-value">${_mlModelInfo.samples.toLocaleString()}</span></div>
+      ` : `<div class="empty-state" style="padding:12px 0"><p style="opacity:0.4">—</p></div>`}
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header">
+        <span class="card-title">${t("mlFeedback")}</span>
+        <button class="btn-sm" id="btn-ml-fb-refresh" ${!_mlStatus ? "disabled" : ""}>${ICONS.refresh}</button>
+      </div>
+      ${Object.keys(_mlFeedbackStats).length > 0 ? `
+        <div style="font-size:12px;margin-top:8px">
+          ${Object.entries(_mlFeedbackStats).map(([name, st]) => `
+            <div style="display:flex;gap:8px;padding:3px 0;align-items:center">
+              <span style="flex:2;font-family:monospace">${esc(name)}</span>
+              <span style="flex:1;color:#4ade80">${t("mlFbSuccess")}: ${st.success}</span>
+              <span style="flex:1;color:#f87171">${t("mlFbFail")}: ${st.fail}</span>
+              <span style="flex:1;opacity:0.6">${t("mlFbTotal")}: ${st.total}</span>
+              <span style="flex:1;opacity:0.6">${st.count > 0 ? (st.total_latency / st.count).toFixed(0) + "ms" : "—"}</span>
+            </div>
+          `).join("")}
+        </div>` : `<div class="empty-state" style="padding:12px 0"><p style="opacity:0.4">${t("mlFbNoData")}</p></div>`}
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header">
+        <span class="card-title">${t("mlDatasets")}</span>
+        <div style="display:flex;gap:4px">
+          <button class="btn-sm" id="btn-ml-ds-capture" ${!_mlStatus ? "disabled" : ""}>${t("mlDsCapture")}</button>
+          <button class="btn-sm" id="btn-ml-ds-refresh" ${!_mlStatus ? "disabled" : ""}>${ICONS.refresh}</button>
+        </div>
+      </div>
+      ${_mlDatasets.length > 0 ? `
+        <div style="font-size:12px;margin-top:8px">
+          ${_mlDatasets.map(ds => `
+            <div style="display:flex;gap:8px;padding:3px 0;font-family:monospace;align-items:center">
+              <span style="flex:3">${esc(ds.name)}</span>
+              <span style="flex:1;opacity:0.6">${(ds.size / 1024).toFixed(1)} KB</span>
+              <span style="flex:2;opacity:0.5">${new Date(ds.modified * 1000).toLocaleString()}</span>
+            </div>
+          `).join("")}
+        </div>` : `<div class="empty-state" style="padding:12px 0"><p style="opacity:0.4">${t("mlDsEmpty")}</p></div>`}
+    </div>
+
     <div class="card">
       <div class="card-header">
         <span class="card-title">${t("mlLogs")}</span>
@@ -1580,7 +2129,6 @@ function _updateMLStatusDOM(): void {
   if (btnAnalyze && !_mlAnalyzing) btnAnalyze.disabled = !_mlStatus;
   const noBinaryRow = document.getElementById("ml-no-binary-row") as HTMLElement | null;
   if (noBinaryRow) noBinaryRow.style.display = (!_mlBinaryExists && !_mlStatus) ? "" : "none";
-  // Update analysis empty state text
   const analysisHint = document.getElementById("ml-analysis-hint");
   if (analysisHint) analysisHint.textContent = _mlStatus ? t("mlScanFirst") : t("mlStopped") + " — " + t("mlStart");
 }
@@ -1594,7 +2142,6 @@ function _updateMLLogsDOM(): void {
 }
 
 function bindMLEvents(): void {
-  // Restore target server + token from localStorage
   _mlTargetServer = localStorage.getItem("ml_target_server") ?? _mlTargetServer;
   _mlToken = localStorage.getItem("ml_token") ?? _mlToken;
 
@@ -1638,13 +2185,11 @@ function bindMLEvents(): void {
     if (btn) { btn.disabled = !_mlTargetServer; btn.textContent = t("mlConnect"); }
   });
 
-  // Initial data fetch
   refreshMLState().then(() => {
     _updateMLStatusDOM();
     _updateMLLogsDOM();
   });
 
-  // Auto-refresh logs every 3s while on this page
   _mlLogsInterval = setInterval(async () => {
     if (currentPage !== "ml") {
       if (_mlLogsInterval) { clearInterval(_mlLogsInterval); _mlLogsInterval = null; }
@@ -1652,11 +2197,11 @@ function bindMLEvents(): void {
     }
     try { _mlStatus = await invoke<boolean>("get_ml_status"); } catch { /**/ }
     if (!_mlStatus) {
-      try { const r = await fetch("https://127.0.0.1:8000/health", { signal: AbortSignal.timeout(1000) }); if (r.ok) _mlStatus = true; } catch { /**/ }
+      try { const r = await fetch(`${_mlEndpoint}/health`, { signal: AbortSignal.timeout(1000) }); if (r.ok) _mlStatus = true; } catch { /**/ }
     }
     if (_mlStatus) {
       try {
-        const r = await fetch("https://127.0.0.1:8000/logs?n=150", { signal: AbortSignal.timeout(1500) });
+        const r = await fetch(`${_mlEndpoint}/logs?n=150`, { signal: AbortSignal.timeout(1500) });
         if (r.ok) { const j = await r.json() as { lines: string[] }; _mlLogs = j.lines.join("\n"); }
       } catch { try { _mlLogs = await invoke<string>("get_ml_logs"); } catch { /**/ } }
     }
@@ -1711,12 +2256,10 @@ function bindMLEvents(): void {
   document.getElementById("btn-ml-analyze")?.addEventListener("click", async () => {
     if (_mlAnalyzing) return;
     _mlAnalyzing = true;
-    // Update button text immediately
     const btn = document.getElementById("btn-ml-analyze") as HTMLButtonElement | null;
     if (btn) { btn.disabled = true; btn.textContent = t("mlAnalyzing"); }
 
     try {
-      // Use explicitly entered target server, fall back to conn_key host
       const target = _mlTargetServer || getServerHost();
       const parts = target.split(":");
       const host = parts[0] || "";
@@ -1745,13 +2288,194 @@ function bindMLEvents(): void {
     }
 
     _mlAnalyzing = false;
-    // Re-render analysis card in-place
     const main = document.getElementById("main-content");
     if (main && currentPage === "ml") { main.innerHTML = renderML(); bindMLEvents(); }
   });
+
+  document.getElementById("btn-ml-scan")?.addEventListener("click", async () => {
+    if (_mlScanning || !_mlStatus) return;
+    _mlScanning = true;
+    const btn = document.getElementById("btn-ml-scan") as HTMLButtonElement | null;
+    if (btn) { btn.disabled = true; btn.textContent = t("mlScanRunning"); }
+    try {
+      const target = _mlTargetServer || getServerHost();
+      const host = target.split(":")[0] || "";
+      const r = await fetch(`${_mlEndpoint}/scan?host=${encodeURIComponent(host)}`, { signal: AbortSignal.timeout(30000) });
+      if (r.ok) {
+        const j = await r.json() as { results: typeof _mlScanResults };
+        _mlScanResults = j.results || [];
+        showToast(lang === "ru" ? `Найдено ${_mlScanResults.filter(x => x.open).length} открытых портов` : `Found ${_mlScanResults.filter(x => x.open).length} open ports`, "success", 3000);
+      }
+    } catch {
+      showToast(lang === "ru" ? "Ошибка сканирования" : "Scan failed", "error", 3000);
+    }
+    _mlScanning = false;
+    const m2 = document.getElementById("main-content");
+    if (m2 && currentPage === "ml") { m2.innerHTML = renderML(); bindMLEvents(); }
+  });
+
+  document.getElementById("btn-ml-train")?.addEventListener("click", async () => {
+    if (!_mlStatus) return;
+    if (_mlTraining) {
+      try { await fetch(`${_mlEndpoint}/train/stop`, { method: "POST", signal: AbortSignal.timeout(5000) }); } catch { /**/ }
+      _mlTraining = false;
+      _mlTrainStatus = t("mlTrainDone");
+      const m3 = document.getElementById("main-content");
+      if (m3 && currentPage === "ml") { m3.innerHTML = renderML(); bindMLEvents(); }
+      return;
+    }
+    _mlTraining = true;
+    _mlTrainProgress = 0;
+    _mlTrainEpoch = 0;
+    _mlTrainLoss = 0;
+    _mlTrainStatus = "";
+    const m4 = document.getElementById("main-content");
+    if (m4 && currentPage === "ml") { m4.innerHTML = renderML(); bindMLEvents(); }
+    try {
+      const r = await fetch(`${_mlEndpoint}/train/start`, { method: "POST", signal: AbortSignal.timeout(5000) });
+      if (!r.ok) throw new Error("start failed");
+      const pollId = setInterval(async () => {
+        if (!_mlTraining || currentPage !== "ml") { clearInterval(pollId); return; }
+        try {
+          const sr = await fetch(`${_mlEndpoint}/train/status`, { signal: AbortSignal.timeout(3000) });
+          if (sr.ok) {
+            const s = await sr.json() as { running: boolean; epoch: number; total_epochs: number; loss: number };
+            _mlTrainEpoch = s.epoch;
+            _mlTrainLoss = s.loss;
+            _mlTrainProgress = s.total_epochs > 0 ? Math.round(s.epoch / s.total_epochs * 100) : 0;
+            const epochEl = document.getElementById("ml-train-epoch");
+            const lossEl = document.getElementById("ml-train-loss");
+            const pctEl = document.getElementById("ml-train-pct");
+            const bar = document.getElementById("ml-train-bar");
+            if (epochEl) epochEl.textContent = String(s.epoch);
+            if (lossEl) lossEl.textContent = s.loss.toFixed(6);
+            if (pctEl) pctEl.textContent = _mlTrainProgress + "%";
+            if (bar) bar.style.width = _mlTrainProgress + "%";
+            if (!s.running) {
+              clearInterval(pollId);
+              _mlTraining = false;
+              _mlTrainStatus = t("mlTrainDone");
+              _mlTrainProgress = 100;
+              showToast(t("mlTrainDone"), "success", 3000);
+              const m5 = document.getElementById("main-content");
+              if (m5 && currentPage === "ml") { m5.innerHTML = renderML(); bindMLEvents(); }
+            }
+          }
+        } catch { /**/ }
+      }, 2000);
+    } catch {
+      _mlTraining = false;
+      _mlTrainStatus = t("mlTrainFailed");
+      showToast(t("mlTrainFailed"), "error", 3000);
+      const m6 = document.getElementById("main-content");
+      if (m6 && currentPage === "ml") { m6.innerHTML = renderML(); bindMLEvents(); }
+    }
+  });
+
+  document.getElementById("btn-ml-fed-export")?.addEventListener("click", async () => {
+    const out = document.getElementById("ml-fed-output");
+    try {
+      const r = await fetch(`${_mlEndpoint}/federated/export`, { signal: AbortSignal.timeout(10000) });
+      if (r.ok) {
+        const j = await r.json();
+        if (out) out.textContent = JSON.stringify(j, null, 2);
+        showToast(t("mlFedExported"), "success", 2000);
+      }
+    } catch { showToast("Error", "error", 2000); }
+  });
+
+  document.getElementById("btn-ml-fed-import")?.addEventListener("click", async () => {
+    const out = document.getElementById("ml-fed-output");
+    try {
+      const r = await fetch(`${_mlEndpoint}/federated/import`, { method: "POST", signal: AbortSignal.timeout(10000) });
+      if (r.ok) {
+        const j = await r.json();
+        if (out) out.textContent = JSON.stringify(j, null, 2);
+        showToast(t("mlFedImported"), "success", 2000);
+      }
+    } catch { showToast("Error", "error", 2000); }
+  });
+
+  document.getElementById("btn-ml-fed-losses")?.addEventListener("click", async () => {
+    const out = document.getElementById("ml-fed-output");
+    try {
+      const r = await fetch(`${_mlEndpoint}/federated/losses`, { signal: AbortSignal.timeout(5000) });
+      if (r.ok) {
+        const j = await r.json();
+        if (out) out.textContent = JSON.stringify(j, null, 2);
+      }
+    } catch { showToast("Error", "error", 2000); }
+  });
+
+  document.getElementById("btn-ml-model-reload")?.addEventListener("click", async () => {
+    try {
+      await fetch(`${_mlEndpoint}/models/load`, { method: "POST", signal: AbortSignal.timeout(5000) });
+      showToast(lang === "ru" ? "Модель перезагружена" : "Model reloaded", "success", 2000);
+      await _refreshMLModelInfo();
+    } catch { showToast("Error", "error", 2000); }
+  });
+
+  document.getElementById("btn-ml-fb-refresh")?.addEventListener("click", _refreshMLFeedback);
+
+  document.getElementById("btn-ml-ds-capture")?.addEventListener("click", async () => {
+    try {
+      const r = await fetch(`${_mlEndpoint}/datasets/capture`, { method: "POST", signal: AbortSignal.timeout(10000) });
+      if (r.ok) {
+        showToast(lang === "ru" ? "Датасет захвачен" : "Dataset captured", "success", 2000);
+        await _refreshMLDatasets();
+        const m = document.getElementById("main-content");
+        if (m && currentPage === "ml") { m.innerHTML = renderML(); bindMLEvents(); }
+      }
+    } catch { showToast("Error", "error", 2000); }
+  });
+
+  document.getElementById("btn-ml-ds-refresh")?.addEventListener("click", async () => {
+    await _refreshMLDatasets();
+    const m = document.getElementById("main-content");
+    if (m && currentPage === "ml") { m.innerHTML = renderML(); bindMLEvents(); }
+  });
+
+  _refreshMLModelInfo();
+  _refreshMLFeedback();
+  _refreshMLDatasets();
 }
 
-/* ===================== MODAL ===================== */
+async function _refreshMLModelInfo(): Promise<void> {
+  try {
+    const r = await fetch(`${_mlEndpoint}/models/status`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      const j = await r.json() as { stats?: { accuracy?: number; parameters?: number; samples?: number; model?: string } };
+      if (j.stats) {
+        _mlModelInfo = {
+          accuracy: j.stats.accuracy ?? 0,
+          parameters: j.stats.parameters ?? 0,
+          samples: j.stats.samples ?? 0,
+          engine: j.stats.model ?? "unknown",
+        };
+      }
+    }
+  } catch { /**/ }
+}
+
+async function _refreshMLFeedback(): Promise<void> {
+  try {
+    const r = await fetch(`${_mlEndpoint}/feedback/stats`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      _mlFeedbackStats = await r.json();
+    }
+  } catch { /**/ }
+}
+
+async function _refreshMLDatasets(): Promise<void> {
+  try {
+    const r = await fetch(`${_mlEndpoint}/datasets`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      const j = await r.json() as { datasets: typeof _mlDatasets };
+      _mlDatasets = j.datasets || [];
+    }
+  } catch { /**/ }
+}
+
 function showProfileModal(): void {
   const ov = document.createElement("div");
   ov.className = "modal-overlay";
@@ -1772,7 +2496,6 @@ function showProfileModal(): void {
   });
 }
 
-/* ===================== UTILS ===================== */
 function esc(s: string): string { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 
 /* ===================== INIT ===================== */
@@ -1781,14 +2504,15 @@ window.addEventListener("DOMContentLoaded", async () => {
   _mlTargetServer = localStorage.getItem("ml_target_server") ?? "";
   _mlToken = localStorage.getItem("ml_token") ?? "";
   await loadSettings();
+  await loadSubscriptions();
   await loadRoutingRules();
+  await loadBlocklist();
   await checkStatus();
-  // Pre-fetch ML state so the page renders correctly on first open
   try { _mlBinaryExists = await invoke<boolean>("ml_binary_exists"); } catch { /**/ }
   try { _mlStatus = await invoke<boolean>("get_ml_status"); } catch { /**/ }
   renderShell();
   checkSites(); fetchIpInfo(); fetchSysInfo();
-  // live uptime counter — tick every second, no re-render
+  startSubAutoCheck();
   setInterval(() => { if (isConnected && connectTime) tickUptime(); }, 1000);
 
   // silent periodic status check — no re-render unless status changed

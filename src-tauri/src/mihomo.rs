@@ -384,20 +384,45 @@ pub fn generate_config(cfg: &MihomoConfig) -> String {
     // Build custom rules before the catch-all MATCH rule.
     let mut custom_rules = String::new();
     for rule in cfg.routing_rules {
+        let action = &rule.action;
         match rule.kind.as_str() {
             "domain" => {
                 custom_rules.push_str(&format!(
                     "  - DOMAIN-SUFFIX,{},{}\n",
-                    rule.value, rule.action
+                    rule.value, action
+                ));
+            }
+            "domain-keyword" => {
+                custom_rules.push_str(&format!(
+                    "  - DOMAIN-KEYWORD,{},{}\n",
+                    rule.value, action
+                ));
+            }
+            "domain-full" => {
+                custom_rules.push_str(&format!(
+                    "  - DOMAIN,{},{}\n",
+                    rule.value, action
                 ));
             }
             "process" => {
-                // Use only the filename part (e.g. "Steam.exe" from a full path)
                 let exe_name = std::path::Path::new(&rule.value)
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or(&rule.value);
-                custom_rules.push_str(&format!("  - PROCESS-NAME,{},{}\n", exe_name, rule.action));
+                custom_rules.push_str(&format!("  - PROCESS-NAME,{},{}\n", exe_name, action));
+            }
+            "ip" => {
+                if rule.value.contains('/') {
+                    custom_rules.push_str(&format!(
+                        "  - IP-CIDR,{},{},no-resolve\n",
+                        rule.value, action
+                    ));
+                } else {
+                    custom_rules.push_str(&format!(
+                        "  - IP-CIDR,{}/32,{},no-resolve\n",
+                        rule.value, action
+                    ));
+                }
             }
             _ => {}
         }

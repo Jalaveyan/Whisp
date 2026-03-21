@@ -9,6 +9,8 @@ on:
       - 'LICENSE**'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/PULL_REQUEST_TEMPLATE*'
+  repository_dispatch:
+    types: [upstream-release]
   workflow_dispatch:
 
 permissions:
@@ -28,7 +30,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      # Скачиваем go-client из последнего релиза основного репо
       - name: Download whispera-go-client
         uses: robinraju/release-downloader@v1.10
         with:
@@ -37,11 +38,11 @@ jobs:
           fileName: 'whispera-go-client-x86_64-pc-windows-msvc.exe'
           out-file-path: src-tauri/binaries/
 
-      # Скачиваем ml-server из последнего релиза ml репо
+      # Скачиваем ml-server из последнего релиза основного репо (Go native, Gorgonia)
       - name: Download whispera-ml-server
         uses: robinraju/release-downloader@v1.10
         with:
-          repository: Jalaveyan/ml
+          repository: Jalaveyan/Whispera
           latest: true
           fileName: 'whispera-ml-server.exe'
           out-file-path: src-tauri/binaries/
