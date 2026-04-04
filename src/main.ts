@@ -54,6 +54,7 @@ interface AppSettings {
   mitm_enabled?: boolean;
   spoof_ips?: string;
   multi_bridges?: MultiBridgeEntry[];
+  tls_fingerprint?: string;
 }
 
 interface Profile { id: string; name: string; key: string; }
