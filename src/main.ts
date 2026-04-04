@@ -1262,10 +1262,23 @@ function getServerBaseURL(): string {
   const key = settings.conn_key.trim();
   if (!key) return "";
   if (key.startsWith("whispera://")) {
+    // Try base64-JSON format: whispera://<base64({server:"host:port",...})>
+    try {
+      const raw = key.slice("whispera://".length).split("?")[0];
+      const decoded = atob(raw);
+      const j = JSON.parse(decoded) as Record<string, unknown>;
+      const srv = (j.server as string) || "";
+      if (srv) {
+        const parts = srv.split(":");
+        const host = parts[0];
+        const port = parts[1] || "8443";
+        return `https://${host}:${port}`;
+      }
+    } catch { /* not base64 JSON */ }
+    // Legacy format: whispera://host:port?params
     try {
       const u = new URL(key);
       const host = u.hostname;
-      // reject if hostname looks like a JWT/base64 blob (contains = or is >40 chars with no dots)
       if (!host || host.includes("=") || (host.length > 40 && !host.includes("."))) return "";
       const scheme = u.port === "443" || u.port === "" ? "https" : "http";
       return `${scheme}://${u.host}`;
