@@ -1290,8 +1290,22 @@ function getServerBaseURL(): string {
 function getServerHost(): string {
   const key = settings.conn_key.trim();
   if (!key) return "";
-  if (key.startsWith("whispera://") && key.includes("?")) {
-    try { return new URL(key).host; } catch { return ""; }
+  if (key.startsWith("whispera://")) {
+    // Try base64-JSON format first
+    try {
+      const raw = key.slice("whispera://".length).split("?")[0];
+      const decoded = atob(raw);
+      const j = JSON.parse(decoded) as Record<string, unknown>;
+      const srv = (j.server as string) || "";
+      if (srv) return srv; // "host:port"
+    } catch { /* not base64 JSON */ }
+    // Legacy format: whispera://host:port?params
+    try {
+      const u = new URL(key);
+      const host = u.hostname;
+      if (!host || host.includes("=") || (host.length > 40 && !host.includes("."))) return "";
+      return u.host;
+    } catch { return ""; }
   }
   return "";
 }
@@ -1759,10 +1773,10 @@ function renderHome(): string {
             <span class="key-hint">Ctrl+Enter</span>
             <button class="paste-btn" id="btn-paste"${dis ? " disabled" : ""}>${t("paste")}</button>
           </div>
+        </div>
         <div class="ks-row">
           <span class="ks-label">Enable ML</span>
           <label class="toggle"><input type="checkbox" id="ml-enable-key" ${_mlEnabledInKey ? "checked" : ""}${dis ? " disabled" : ""}/><span class="toggle-slider"></span></label>
-        </div>
         </div>
         <div class="ks-row">
           <span class="ks-label">${t("killSwitch")}</span>
