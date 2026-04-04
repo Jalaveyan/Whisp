@@ -1553,12 +1553,37 @@ function updateSysDOM(): void {
   if (adm) { adm.textContent = sysInfo.admin ? "ON" : "OFF"; adm.className = "info-value " + (sysInfo.admin ? "badge-on" : "badge-off"); }
 }
 
+function _refreshLogBox(): void {
+  const box = document.getElementById("log-box");
+  if (!box) return;
+  const filtered = logLines.filter(l => {
+    if (logFilter !== "all") {
+      const level = logFilter.toUpperCase();
+      if (!l.toUpperCase().includes(`[${level}]`) && !l.toUpperCase().includes(`"level":"${level}"`)) return false;
+    }
+    if (logSearch && !l.toLowerCase().includes(logSearch.toLowerCase())) return false;
+    return true;
+  });
+  const colorized = filtered.map(l => {
+    let cls = "log-line";
+    const u = l.toUpperCase();
+    if (u.includes("[ERROR]") || u.includes('"level":"error"')) cls += " log-error";
+    else if (u.includes("[WARN]") || u.includes('"level":"warn"')) cls += " log-warn";
+    else if (u.includes("[INFO]") || u.includes('"level":"info"')) cls += " log-info";
+    else if (u.includes("[DEBUG]") || u.includes('"level":"debug"')) cls += " log-debug";
+    return `<div class="${cls}">${esc(l)}</div>`;
+  }).join("");
+  box.innerHTML = colorized || `<div class="log-line log-info">${t("logReady")}</div>`;
+  box.scrollTop = box.scrollHeight;
+  const cnt = document.querySelector(".log-count");
+  if (cnt) cnt.textContent = `${filtered.length}/${logLines.length}`;
+}
+
 function addLog(line: string): void {
   const ts = new Date().toLocaleTimeString();
   logLines.push("[" + ts + "] " + line);
   if (logLines.length > 500) logLines.shift();
-  const box = document.getElementById("log-box");
-  if (box) { box.textContent = logLines.join("\n"); box.scrollTop = box.scrollHeight; }
+  _refreshLogBox();
 }
 
 function renderShell(): void {
@@ -3522,14 +3547,12 @@ function renderLogs(): string {
 function bindLogEvents(): void {
   document.getElementById("log-search")?.addEventListener("input", function () {
     logSearch = (this as HTMLInputElement).value;
-    const box = document.getElementById("log-box");
-    if (box) { const tmp = document.createElement("div"); tmp.innerHTML = renderLogs(); const newBox = tmp.querySelector("#log-box"); if (newBox) box.innerHTML = newBox.innerHTML; }
-    const cnt = document.querySelector(".log-count");
-    if (cnt) { const f = logLines.filter(l => { if (logFilter !== "all" && !l.toUpperCase().includes(`[${logFilter.toUpperCase()}]`)) return false; if (logSearch && !l.toLowerCase().includes(logSearch.toLowerCase())) return false; return true; }); cnt.textContent = `${f.length}/${logLines.length}`; }
+    _refreshLogBox();
   });
   document.querySelectorAll<HTMLElement>(".log-filter-btn").forEach(btn => btn.addEventListener("click", () => {
     logFilter = btn.dataset.filter || "all";
-    renderPage();
+    document.querySelectorAll<HTMLElement>(".log-filter-btn").forEach(b => b.classList.toggle("active", b.dataset.filter === logFilter));
+    _refreshLogBox();
   }));
 }
 
