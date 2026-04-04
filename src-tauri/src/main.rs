@@ -1197,6 +1197,56 @@ async fn save_routing_rules(app: tauri::AppHandle, rules: Vec<RoutingRule>) -> R
     Ok(())
 }
 
+/// Regenerate mihomo config with current settings (incl. tls_fingerprint) and hot-reload via external controller.
+#[tauri::command]
+async fn apply_tls_fingerprint(app: tauri::AppHandle) -> Result<(), String> {
+    let settings = get_app_settings(app.clone())?;
+    let config_path = mihomo_config_path(&app);
+    let socks_addr = if settings.socks_addr.contains(':') {
+        settings.socks_addr.clone()
+    } else {
+        format!("{}:1080", settings.socks_addr)
+    };
+    let mut routing_rules: Vec<mihomo::MihomoRoutingRule> = Vec::new();
+    for r in &settings.blocklist {
+        routing_rules.push(mihomo::MihomoRoutingRule {
+            kind: r.kind.clone(),
+            value: r.value.clone(),
+            action: "REJECT".to_string(),
+        });
+    }
+    for r in &settings.routing_rules {
+        routing_rules.push(mihomo::MihomoRoutingRule {
+            kind: r.kind.clone(),
+            value: r.value.clone(),
+            action: r.action.clone(),
+        });
+    }
+    let mihomo_config = mihomo::generate_config(&mihomo::MihomoConfig {
+        socks_addr: &socks_addr,
+        mixed_port: settings.mihomo_port,
+        tun_stack: &settings.tun_stack,
+        dns_redirect: settings.dns_redirect,
+        ipv6: settings.ipv6,
+        routing_rules: &routing_rules,
+        extra_socks_addrs: &[],
+        custom_dns: &settings.custom_dns,
+        tls_fingerprint: &settings.tls_fingerprint,
+    });
+    fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
+
+    let config_str = config_path.to_string_lossy().replace('\\', "/");
+    reqwest::Client::new()
+        .put("http://127.0.0.1:9090/configs?force=true")
+        .json(&serde_json::json!({ "path": config_str }))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .map_err(|e| format!("mihomo reload failed: {}", e))?;
+
+    Ok(())
+}
+
 #[tauri::command]
 fn get_blocklist(app: tauri::AppHandle) -> Result<Vec<RoutingRule>, String> {
     let settings = get_app_settings(app)?;
@@ -1847,6 +1897,7 @@ fn main() {
             get_app_settings,
             save_app_setting,
             patch_app_settings,
+            apply_tls_fingerprint,
             connect,
             disconnect,
             get_status,

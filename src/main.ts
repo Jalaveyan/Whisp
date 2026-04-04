@@ -321,6 +321,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     profileVideoSep: "── Видео ──",
     fpRandom: "Случайный",
     fpBrowser: "Браузер",
+    fpApplyNow: "Применить",
     ruleBlock: "Блок",
     ruleDirect: "Прямой",
     ruleSite: "сайт",
@@ -575,6 +576,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     profileVideoSep: "── Video ──",
     fpRandom: "Random",
     fpBrowser: "Browser",
+    fpApplyNow: "Apply Now",
     ruleBlock: "Block",
     ruleDirect: "Direct",
     ruleSite: "site",
@@ -829,6 +831,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     profileVideoSep: "── 视频 ──",
     fpRandom: "随机",
     fpBrowser: "浏览器",
+    fpApplyNow: "立即应用",
     ruleBlock: "拦截",
     ruleDirect: "直连",
     ruleSite: "站点",
@@ -1083,6 +1086,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     profileVideoSep: "── ویدیو ──",
     fpRandom: "تصادفی",
     fpBrowser: "مرورگر",
+    fpApplyNow: "اعمال",
     ruleBlock: "مسدود",
     ruleDirect: "مستقیم",
     ruleSite: "سایت",
@@ -2556,7 +2560,10 @@ function renderConnections(): string {
             ${[["chrome","Chrome Auto"],["chrome_120","Chrome 120"],["chrome_115","Chrome 115"],["firefox","Firefox Auto"],["firefox_120","Firefox 120"],["safari","Safari Auto"],["ios","iOS Safari"],["android","Android OkHttp"],["edge","Edge Auto"],["random",t("fpRandom")]].map(([v,l])=>`<div class="custom-select-option${currentFingerprint===v?" selected":""}" data-value="${v}">${l}</div>`).join("")}
           </div>
         </div>
-        <span id="fp-desc" style="font-size:12px;opacity:.45">${getFPDescription(currentFingerprint)}</span>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
+          <span id="fp-desc" style="font-size:12px;opacity:.45;flex:1">${getFPDescription(currentFingerprint)}</span>
+          ${isConnected ? `<button class="btn-sm" id="btn-fp-apply" style="font-size:11px;padding:3px 10px">${t("fpApplyNow")}</button>` : ""}
+        </div>
       </div>
     </div>
 
@@ -2717,6 +2724,19 @@ function bindConnectionsEvents(): void {
     });
     document.addEventListener("click", () => fpSelect.classList.remove("open"));
   }
+
+  document.getElementById("btn-fp-apply")?.addEventListener("click", async () => {
+    const btn = document.getElementById("btn-fp-apply") as HTMLButtonElement | null;
+    if (btn) btn.disabled = true;
+    try {
+      await invoke("apply_tls_fingerprint");
+      showToast(`${t("fingerprintSet")} ${currentFingerprint}`, "success", 2000);
+    } catch (e) {
+      showToast(String(e), "error", 3000);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
 
   if (nodeViewActive) {
     bindNodeGraphEvents();
