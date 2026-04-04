@@ -29,9 +29,6 @@ impl MihomoManager {
         }
     }
 
-    /// Install mihomo as a Windows Service.
-    /// The config_path must be the final config location (e.g. AppData).
-    /// Requires admin rights.
     pub fn install_service(&self, config_path: &Path) -> Result<(), String> {
         let bin = self.binary_path.to_string_lossy().to_string();
         let cfg = config_path.to_string_lossy().to_string();
@@ -48,7 +45,6 @@ impl MihomoManager {
             cfg.replace('"', "\\\""),
         );
 
-        // Remove existing service first
         let _ = Command::new("sc")
             .args(["stop", SERVICE_NAME])
             .creation_flags_win(CREATE_NO_WINDOW)
@@ -79,13 +75,11 @@ impl MihomoManager {
         if !status.status.success() {
             let stdout = String::from_utf8_lossy(&status.stdout).to_string();
             let stderr = String::from_utf8_lossy(&status.stderr).to_string();
-            // Error 1073 means service already exists — that's OK
             if !stdout.contains("1073") && !stderr.contains("1073") {
                 return Err(format!("Service install failed: {} {}", stdout, stderr));
             }
         }
 
-        // Set description
         let _ = Command::new("sc")
             .args([
                 "description",
@@ -95,7 +89,6 @@ impl MihomoManager {
             .creation_flags_win(CREATE_NO_WINDOW)
             .output();
 
-        // Run as LocalSystem (has rights to create TUN adapter)
         let _ = Command::new("sc")
             .args(["config", SERVICE_NAME, "obj=", "LocalSystem"])
             .creation_flags_win(CREATE_NO_WINDOW)
@@ -128,14 +121,12 @@ impl MihomoManager {
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
 
-        // 1056 = already running
         if out.status.success()
             || stdout.contains("RUNNING")
             || stderr.contains("1056")
             || stdout.contains("1056")
         {
             self.use_service = true;
-            // Give mihomo time to initialize TUN
             std::thread::sleep(std::time::Duration::from_millis(2000));
             return Ok(());
         }
@@ -150,7 +141,6 @@ impl MihomoManager {
             .output()
             .ok();
         std::thread::sleep(std::time::Duration::from_millis(1500));
-        // Force-kill any remaining mihomo process
         Command::new("taskkill")
             .args(["/F", "/IM", "mihomo.exe"])
             .creation_flags_win(CREATE_NO_WINDOW)
@@ -165,9 +155,7 @@ impl MihomoManager {
             self.stop()?;
         }
 
-        // Try service mode if registered
         if service_exists(SERVICE_NAME) {
-            // Update config path by reinstalling service
             if self.install_service(config_path).is_ok() {
                 if self.start_service().is_ok() {
                     return Ok(());
@@ -175,7 +163,6 @@ impl MihomoManager {
             }
         }
 
-        // Fall back to direct spawn
         if is_admin() {
             self.start_direct(config_path)
         } else {
@@ -211,7 +198,6 @@ impl MihomoManager {
             .to_string_lossy()
             .to_string();
 
-        // Launch mihomo elevated and hidden via UAC
         let ps_cmd = format!(
             "Start-Process -FilePath '{}' -ArgumentList '-d','{}','-f','{}' -Verb RunAs -WindowStyle Hidden",
             bin.replace('\'', "''"),
@@ -254,19 +240,32 @@ impl MihomoManager {
         if let Some(ref mut child) = self.process {
             child.kill().ok();
             child.wait().ok();
-        } else if self.elevated {
-            // Kill elevated mihomo (need elevated taskkill)
-            Command::new("powershell")
-                .args([
-                    "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
-                    "Start-Process -FilePath 'taskkill' -ArgumentList '/F','/IM','mihomo.exe' -Verb RunAs -WindowStyle Hidden -Wait",
-                ])
+        }
+
+        #[cfg(windows)]
+        {
+            Command::new("taskkill")
+                .args(["/F", "/IM", "mihomo.exe"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .creation_flags_win(CREATE_NO_WINDOW)
                 .spawn()
                 .ok()
                 .and_then(|mut c| c.wait().ok());
+
+            if self.elevated || self.process.is_none() {
+                Command::new("powershell")
+                    .args([
+                        "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
+                        "Start-Process -FilePath 'taskkill' -ArgumentList '/F','/IM','mihomo.exe' -Verb RunAs -WindowStyle Hidden -Wait",
+                    ])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .creation_flags_win(CREATE_NO_WINDOW)
+                    .spawn()
+                    .ok()
+                    .and_then(|mut c| c.wait().ok());
+            }
         }
 
         self.process = None;
@@ -307,7 +306,6 @@ impl Drop for MihomoManager {
     }
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
 
 fn is_admin() -> bool {
     Command::new("net")
@@ -350,7 +348,6 @@ impl CommandExtWin for Command {
     }
 }
 
-// ── Mihomo config generator ───────────────────────────────────────────────────
 
 pub struct MihomoRoutingRule {
     pub kind: String,
@@ -365,6 +362,22 @@ pub struct MihomoConfig<'a> {
     pub dns_redirect: bool,
     pub ipv6: bool,
     pub routing_rules: &'a [MihomoRoutingRule],
+    pub extra_socks_addrs: &'a [String],
+    pub custom_dns: &'a [String],
+    pub tls_fingerprint: &'a str,
+}
+
+fn map_fingerprint(fp: &str) -> &str {
+    match fp {
+        "chrome" | "chrome_120" | "chrome_115" => "chrome",
+        "firefox" | "firefox_120" => "firefox",
+        "safari" => "safari",
+        "ios" => "ios",
+        "android" => "android",
+        "edge" => "edge",
+        "random" => "random",
+        _ => "chrome",
+    }
 }
 
 pub fn generate_config(cfg: &MihomoConfig) -> String {
@@ -380,8 +393,38 @@ pub fn generate_config(cfg: &MihomoConfig) -> String {
     let port = cfg.mixed_port;
     let tun_stack = cfg.tun_stack;
     let ipv6 = cfg.ipv6;
+    let nameservers: String = if cfg.custom_dns.is_empty() {
+        "    - 77.88.8.8\n    - 77.88.8.1\n    - 8.8.8.8\n    - 1.1.1.1".to_string()
+    } else {
+        cfg.custom_dns.iter().map(|s| format!("    - {}", s)).collect::<Vec<_>>().join("\n")
+    };
 
-    // Build custom rules before the catch-all MATCH rule.
+    // Build extra proxy entries and the proxy-group YAML.
+    let mut extra_proxies = String::new();
+    let mut all_proxy_names = vec!["whisp-server".to_string()];
+    for (i, addr) in cfg.extra_socks_addrs.iter().enumerate() {
+        let parts: Vec<&str> = addr.splitn(2, ':').collect();
+        let h = parts.first().copied().unwrap_or("127.0.0.1");
+        let p: u16 = parts.get(1).copied().unwrap_or("10900").parse().unwrap_or(10900);
+        let name = format!("whisp-extra-{}", i);
+        extra_proxies.push_str(&format!(
+            "  - name: {name}\n    type: socks5\n    server: {h}\n    port: {p}\n    udp: true\n"
+        ));
+        all_proxy_names.push(name);
+    }
+
+    let proxy_group = if all_proxy_names.len() > 1 {
+        let names_yaml: String = all_proxy_names.iter()
+            .map(|n| format!("      - {}\n", n))
+            .collect();
+        format!(
+            "  - name: PROXY\n    type: load-balance\n    strategy: round-robin\n    url: http://www.gstatic.com/generate_204\n    interval: 30\n    proxies:\n{}",
+            names_yaml
+        )
+    } else {
+        "  - name: PROXY\n    type: select\n    proxies:\n      - whisp-server\n".to_string()
+    };
+
     let mut custom_rules = String::new();
     for rule in cfg.routing_rules {
         let action = &rule.action;
@@ -428,12 +471,19 @@ pub fn generate_config(cfg: &MihomoConfig) -> String {
         }
     }
 
+    let fp = map_fingerprint(cfg.tls_fingerprint);
+    let fp_line = if cfg.tls_fingerprint.is_empty() || cfg.tls_fingerprint == "chrome" {
+        String::new()
+    } else {
+        format!("global-client-fingerprint: {fp}\n")
+    };
+
     format!(
         r#"mixed-port: {port}
 allow-lan: false
 ipv6: {ipv6}
 mode: rule
-log-level: info
+{fp_line}log-level: info
 external-controller: 127.0.0.1:9090
 find-process-mode: strict
 
@@ -468,10 +518,7 @@ dns:
     - "+.stun.*.*"
     - "+.stun.*.*.*"
   nameserver:
-    - 77.88.8.8
-    - 77.88.8.1
-    - 8.8.8.8
-    - 1.1.1.1
+{nameservers}
 
 tun:
   enable: true
@@ -488,12 +535,9 @@ proxies:
     server: {server}
     port: {server_port}
     udp: true
-
+{extra_proxies}
 proxy-groups:
-  - name: PROXY
-    type: select
-    proxies:
-      - whisp-server
+{proxy_group}
 
 rules:
   - DOMAIN-SUFFIX,ru,DIRECT

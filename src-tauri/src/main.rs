@@ -16,9 +16,16 @@ mod go_client;
 mod mihomo;
 mod ml_server;
 
-use go_client::{GoClientConfig, GoClientManager};
+use go_client::{ExtraKeySpec, GoClientConfig, GoClientManager};
 use mihomo::MihomoManager;
 use ml_server::MlServerManager;
+
+static ML_ENDPOINT: std::sync::LazyLock<Mutex<String>> =
+    std::sync::LazyLock::new(|| Mutex::new(String::new()));
+
+static EXTRA_KEY_COUNT: std::sync::LazyLock<Mutex<usize>> =
+    std::sync::LazyLock::new(|| Mutex::new(0));
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RoutingRule {
@@ -58,6 +65,24 @@ struct AppSettings {
     ml_server: String,
     #[serde(default)]
     ml_token: String,
+    #[serde(default)]
+    extra_keys: Vec<String>,
+    #[serde(default)]
+    custom_dns: Vec<String>,
+    #[serde(default)]
+    p2p_relay_addr: String,
+    #[serde(default)]
+    p2p_secret: String,
+    #[serde(default)]
+    vpn_dns: String,
+    #[serde(default)]
+    mitm_enabled: bool,
+    #[serde(default)]
+    spoof_ips: String,
+    #[serde(default)]
+    multi_bridges: Vec<serde_json::Value>,
+    #[serde(default)]
+    tls_fingerprint: String,
 }
 
 fn default_true() -> bool {
@@ -74,7 +99,7 @@ impl Default for AppSettings {
             auto_connect: false,
             theme: "dark".to_string(),
             mihomo_port: 9887,
-            socks_addr: "127.0.0.1:1080".to_string(),
+            socks_addr: "127.0.0.1:1081".to_string(),
             kill_switch: false,
             dns_redirect: false,
             ipv6: true,
@@ -87,6 +112,15 @@ impl Default for AppSettings {
             ml_transport: String::new(),
             ml_server: String::new(),
             ml_token: String::new(),
+            extra_keys: Vec::new(),
+            custom_dns: Vec::new(),
+            p2p_relay_addr: String::new(),
+            p2p_secret: String::new(),
+            vpn_dns: String::new(),
+            mitm_enabled: false,
+            spoof_ips: String::new(),
+            multi_bridges: Vec::new(),
+            tls_fingerprint: String::new(),
         }
     }
 }
@@ -95,6 +129,7 @@ struct AppState {
     mihomo: Mutex<MihomoManager>,
     go_client: Mutex<GoClientManager>,
     ml_server: Mutex<MlServerManager>,
+    watchdog_specs: Mutex<Vec<ExtraKeySpec>>,
 }
 
 fn settings_path(app: &tauri::AppHandle) -> PathBuf {
@@ -138,10 +173,39 @@ fn save_app_setting(app: tauri::AppHandle, mut settings: AppSettings) -> Result<
                 settings.ml_transport = existing.ml_transport;
                 settings.ml_server = existing.ml_server;
                 settings.ml_token = existing.ml_token;
+                settings.extra_keys = existing.extra_keys;
+                if settings.custom_dns.is_empty() { settings.custom_dns = existing.custom_dns; }
+                if settings.p2p_relay_addr.is_empty() { settings.p2p_relay_addr = existing.p2p_relay_addr; }
+                if settings.p2p_secret.is_empty() { settings.p2p_secret = existing.p2p_secret; }
+                if settings.vpn_dns.is_empty() { settings.vpn_dns = existing.vpn_dns; }
+                if settings.spoof_ips.is_empty() { settings.spoof_ips = existing.spoof_ips; }
+                if !settings.mitm_enabled { settings.mitm_enabled = existing.mitm_enabled; }
+                if settings.multi_bridges.is_empty() { settings.multi_bridges = existing.multi_bridges; }
+                if settings.tls_fingerprint.is_empty() { settings.tls_fingerprint = existing.tls_fingerprint; }
             }
         }
     }
     let data = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&path, data).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Patch a single field in settings.json by merging a JSON object.
+#[tauri::command]
+fn patch_app_settings(app: tauri::AppHandle, patch: serde_json::Value) -> Result<(), String> {
+    let path = settings_path(&app);
+    let mut current: serde_json::Value = if path.exists() {
+        let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&raw).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    if let (Some(obj), Some(patch_obj)) = (current.as_object_mut(), patch.as_object()) {
+        for (k, v) in patch_obj {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+    let data = serde_json::to_string_pretty(&current).map_err(|e| e.to_string())?;
     fs::write(&path, data).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -160,18 +224,28 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
         format!("{}:1080", settings.socks_addr)
     };
 
-    let ml_transport = {
-        let host = settings.conn_key
-            .trim_start_matches("whispera://")
-            .split('?').next().unwrap_or("")
-            .split(':').next().unwrap_or("")
-            .to_string();
+    let (ml_transport, key_enable_ml) = {
+        use base64::Engine as _;
+        let raw = settings.conn_key.trim_start_matches("whispera://");
+        let (host, port, enable_ml) = if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(raw) {
+            if let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                let srv = j["server"].as_str().unwrap_or("");
+                let h = srv.split(':').next().unwrap_or("").to_string();
+                let p: u16 = srv.split(':').nth(1).and_then(|s| s.parse().ok()).unwrap_or(8443);
+                let ml = j["enable_ml"].as_bool().unwrap_or(false);
+                (h, p, ml)
+            } else {
+                (String::new(), 8443u16, false)
+            }
+        } else {
+            (String::new(), 8443u16, false)
+        };
 
-        if !host.is_empty() {
+        let transport = if !host.is_empty() {
             let ml_c = ml_client();
             match ml_request(&ml_c, reqwest::Method::POST, &ml_url("/recommend/transport"))
                 .timeout(Duration::from_secs(3))
-                .json(&serde_json::json!({ "server_host": host, "server_port": 8443 }))
+                .json(&serde_json::json!({ "server_host": host, "server_port": port }))
                 .send()
                 .await
             {
@@ -183,7 +257,8 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
             }
         } else {
             String::new()
-        }
+        };
+        (transport, enable_ml)
     };
 
     if !ml_transport.is_empty() {
@@ -196,15 +271,70 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
 
     let transport_to_use = if !ml_transport.is_empty() { &ml_transport } else { "" };
 
+    let (ml_token_val, ml_server_val) = if key_enable_ml {
+        (settings.ml_token.clone(), ml_url(""))
+    } else {
+        (String::new(), String::new())
+    };
+
     let mut gc = state.go_client.lock().map_err(|e| e.to_string())?;
+    eprintln!("[connect] starting go-client, socks={}, transport={}, key_len={}, ml={}", socks_addr, transport_to_use, settings.conn_key.len(), key_enable_ml);
     gc.start(&GoClientConfig {
         conn_key: &settings.conn_key,
         server_addr: "",
-        ml_token: "",
+        ml_token: &ml_token_val,
         socks_addr: &socks_addr,
         kill_switch: settings.kill_switch,
         transport: transport_to_use,
-    })?;
+        ml_server_url: &ml_server_val,
+        vpn_dns: &settings.vpn_dns,
+        mitm_enabled: settings.mitm_enabled,
+        spoof_ips: &settings.spoof_ips,
+    }).map_err(|e| { eprintln!("[connect] go-client start FAILED: {}", e); e })?;
+    eprintln!("[connect] go-client started OK");
+
+    if !settings.multi_bridges.is_empty() {
+        let bridges_clone = settings.multi_bridges.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            let client = reqwest::Client::new();
+            for b in &bridges_clone {
+                if let Err(e) = client
+                    .post("http://127.0.0.1:10801/multi-bridges")
+                    .json(b)
+                    .send()
+                    .await
+                {
+                    eprintln!("[multi-bridge] restore failed: {}", e);
+                }
+            }
+        });
+    }
+
+    gc.stop_extras();
+    let mut active_extras = 0usize;
+    for (i, extra_key) in settings.extra_keys.iter().enumerate() {
+        if extra_key.is_empty() { continue; }
+        let socks_port = 10900u16 + i as u16;
+        let ctrl_port = GoClientManager::extra_control_port(i);
+        if let Err(e) = gc.start_extra(extra_key, socks_port, ctrl_port) {
+            eprintln!("[connect] extra key {} start failed: {}", i, e);
+        } else {
+            eprintln!("[connect] extra key {} started on socks:{} ctrl:{}", i, socks_port, ctrl_port);
+            active_extras += 1;
+        }
+    }
+    if let Ok(mut cnt) = EXTRA_KEY_COUNT.lock() { *cnt = active_extras; }
+    if let Ok(mut specs) = state.watchdog_specs.lock() {
+        *specs = settings.extra_keys.iter().enumerate()
+            .filter(|(_, k)| !k.is_empty())
+            .map(|(i, k)| ExtraKeySpec {
+                key: k.clone(),
+                socks_port: 10900u16 + i as u16,
+                ctrl_port: GoClientManager::extra_control_port(i),
+            })
+            .collect();
+    }
 
     let config_path = mihomo_config_path(&app);
     let mut routing_rules: Vec<mihomo::MihomoRoutingRule> = Vec::new();
@@ -223,6 +353,11 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
         });
     }
 
+    let extra_addrs: Vec<String> = settings.extra_keys.iter().enumerate()
+        .filter(|(_, k)| !k.is_empty())
+        .map(|(i, _)| format!("127.0.0.1:{}", 10900u16 + i as u16))
+        .collect();
+
     let mihomo_config = mihomo::generate_config(&mihomo::MihomoConfig {
         socks_addr: &socks_addr,
         mixed_port: settings.mihomo_port,
@@ -230,6 +365,9 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
         dns_redirect: settings.dns_redirect,
         ipv6: settings.ipv6,
         routing_rules: &routing_rules,
+        extra_socks_addrs: &extra_addrs,
+        custom_dns: &settings.custom_dns,
+        tls_fingerprint: &settings.tls_fingerprint,
     });
     fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
 
@@ -249,16 +387,39 @@ async fn connect_ml(
     token: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    if server.is_empty() {
-        return Err("Server address required (host:port)".to_string());
-    }
-
     let settings = get_app_settings(app.clone())?;
+
+    if server.is_empty() && settings.conn_key.is_empty() {
+        return Err("Connection key or server address required".to_string());
+    }
     let socks_addr = if settings.socks_addr.contains(':') {
         settings.socks_addr.clone()
     } else {
         format!("{}:1080", settings.socks_addr)
     };
+
+    let need_ml_wait = {
+        let mut ml = state.ml_server.lock().map_err(|e| e.to_string())?;
+        if !ml.is_running() {
+            ml.set_token(&token);
+            ml.start().ok();
+            true
+        } else {
+            false
+        }
+    };
+    if need_ml_wait {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    if let Ok(mut ep) = ML_ENDPOINT.lock() {
+        if !settings.ml_server.is_empty() {
+            *ep = settings.ml_server.clone();
+        } else {
+            *ep = "http://127.0.0.1:8000".to_string();
+        }
+    }
+    let ml_endpoint = ml_url("");
 
     let host = server.split(':').next().unwrap_or(&server).to_string();
     let port: u16 = server.split(':').nth(1).and_then(|p| p.parse().ok()).unwrap_or(8443);
@@ -290,23 +451,61 @@ async fn connect_ml(
 
     let mut gc = state.go_client.lock().map_err(|e| e.to_string())?;
     gc.start(&GoClientConfig {
-        conn_key: "",
+        conn_key: &settings.conn_key,
         server_addr: &server,
         ml_token: &token,
         socks_addr: &socks_addr,
         kill_switch: settings.kill_switch,
         transport: transport_ref,
+        ml_server_url: &ml_endpoint,
+        vpn_dns: &settings.vpn_dns,
+        mitm_enabled: settings.mitm_enabled,
+        spoof_ips: &settings.spoof_ips,
     })?;
+
+    let config_path = mihomo_config_path(&app);
+    let mut routing_rules: Vec<mihomo::MihomoRoutingRule> = Vec::new();
+    for r in &settings.blocklist {
+        routing_rules.push(mihomo::MihomoRoutingRule {
+            kind: r.kind.clone(),
+            value: r.value.clone(),
+            action: "REJECT".to_string(),
+        });
+    }
+    for r in &settings.routing_rules {
+        routing_rules.push(mihomo::MihomoRoutingRule {
+            kind: r.kind.clone(),
+            value: r.value.clone(),
+            action: r.action.clone(),
+        });
+    }
+    let mihomo_config = mihomo::generate_config(&mihomo::MihomoConfig {
+        socks_addr: &socks_addr,
+        mixed_port: settings.mihomo_port,
+        tun_stack: &settings.tun_stack,
+        dns_redirect: settings.dns_redirect,
+        ipv6: settings.ipv6,
+        routing_rules: &routing_rules,
+        extra_socks_addrs: &[],
+        custom_dns: &settings.custom_dns,
+        tls_fingerprint: &settings.tls_fingerprint,
+    });
+    fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
+    let mut mgr = state.mihomo.lock().map_err(|e| e.to_string())?;
+    mgr.start(&config_path)?;
 
     Ok(format!("ML connected to {} via {}", server, if ml_transport.is_empty() { "tcp" } else { &ml_transport }))
 }
 
 #[tauri::command]
 fn disconnect(state: tauri::State<AppState>) -> Result<String, String> {
+    state.watchdog_specs.lock().ok().map(|mut s| s.clear());
+
     let mut mihomo = state.mihomo.lock().map_err(|e| e.to_string())?;
     mihomo.stop()?;
 
     let mut gc = state.go_client.lock().map_err(|e| e.to_string())?;
+    gc.stop_extras();
     gc.stop()?;
 
     Ok("Disconnected".to_string())
@@ -317,6 +516,457 @@ fn get_status(state: tauri::State<AppState>) -> Result<bool, String> {
     let mut mihomo = state.mihomo.lock().map_err(|e| e.to_string())?;
     let mut gc = state.go_client.lock().map_err(|e| e.to_string())?;
     Ok(mihomo.is_running() && gc.is_running())
+}
+
+const CONTROL_PORT_MAIN: u16 = 10801;
+
+fn control_base(port: u16) -> String {
+    format!("http://127.0.0.1:{}", port)
+}
+
+fn conn_url(id: &str, action: &str) -> String {
+    format!("{}/connections/{}/{}", control_base(control_port_for_id(id)), raw_id(id), action)
+}
+
+fn control_port_for_id(id: &str) -> u16 {
+    if let Some(rest) = id.strip_prefix('e') {
+        if let Some(colon) = rest.find(':') {
+            if let Ok(i) = rest[..colon].parse::<usize>() {
+                return GoClientManager::extra_control_port(i);
+            }
+        }
+    }
+    CONTROL_PORT_MAIN
+}
+
+fn raw_id(id: &str) -> &str {
+    if let Some(rest) = id.strip_prefix('e') {
+        if let Some(colon) = rest.find(':') {
+            if rest[..colon].chars().all(|c| c.is_ascii_digit()) {
+                return &id[id.find(':').unwrap() + 1..];
+            }
+        }
+    }
+    id
+}
+
+#[tauri::command]
+async fn get_connections() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut all: Vec<serde_json::Value> = match client
+        .get(format!("{}/connections", control_base(CONTROL_PORT_MAIN)))
+        .send().await
+    {
+        Ok(r) => r.json::<Vec<serde_json::Value>>().await.unwrap_or_default(),
+        Err(_) => vec![],
+    };
+
+    let extra_count = EXTRA_KEY_COUNT.lock().map(|g| *g).unwrap_or(0);
+    for i in 0..extra_count {
+        let port = GoClientManager::extra_control_port(i);
+        if let Ok(r) = client.get(format!("{}/connections", control_base(port))).send().await {
+            if let Ok(mut entries) = r.json::<Vec<serde_json::Value>>().await {
+                for entry in &mut entries {
+                    if let Some(id) = entry.get("id").and_then(|v| v.as_str()) {
+                        entry["id"] = serde_json::Value::String(format!("e{}:{}", i, id));
+                        entry["key_index"] = serde_json::Value::Number(i.into());
+                    }
+                }
+                all.extend(entries);
+            }
+        }
+    }
+
+    Ok(serde_json::Value::Array(all))
+}
+
+#[tauri::command]
+async fn close_connection(id: String) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    client.post(conn_url(&id, "close"))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn toggle_connection(id: String, enabled: bool) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    client.post(conn_url(&id, "toggle"))
+        .json(&serde_json::json!({"enabled": enabled}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn toggle_obfuscation(id: String, enabled: bool) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    client.post(conn_url(&id, "obfuscation"))
+        .json(&serde_json::json!({"enabled": enabled}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn switch_transport(id: String, transport: String) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    client.post(conn_url(&id, "transport"))
+        .json(&serde_json::json!({"transport": transport}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn p2p_status() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(format!("{}/p2p", &control_base(CONTROL_PORT_MAIN)))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn p2p_register(relay_addr: String, secret: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.post(format!("{}/p2p/register", &control_base(CONTROL_PORT_MAIN)))
+        .json(&serde_json::json!({"relay_addr": relay_addr, "secret": secret}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    if !resp.status().is_success() {
+        return Err(resp.text().await.unwrap_or_default());
+    }
+    let v = resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())?;
+    Ok(v["peer_id"].as_str().unwrap_or("").to_string())
+}
+
+#[tauri::command]
+async fn p2p_connect(target: String, relay_addr: String, secret: String) -> Result<bool, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(35))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.post(format!("{}/p2p/connect", &control_base(CONTROL_PORT_MAIN)))
+        .json(&serde_json::json!({"target": target, "relay_addr": relay_addr, "secret": secret}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(resp.status().is_success())
+}
+
+#[tauri::command]
+async fn bridge_ping(app: tauri::AppHandle, bridge_id: String, count: Option<u32>, mode: Option<String>) -> Result<serde_json::Value, String> {
+    let settings = get_app_settings(app)?;
+    let base_url = {
+        use base64::Engine as _;
+        let raw = settings.conn_key.trim_start_matches("whispera://");
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(raw) {
+            if let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                let srv = j["server"].as_str().unwrap_or("");
+                if !srv.is_empty() {
+                    let host = srv.split(':').next().unwrap_or("").to_string();
+                    let port: u16 = srv.split(':').nth(1).and_then(|s| s.parse().ok()).unwrap_or(8443);
+                    format!("https://{}:{}", host, port)
+                } else {
+                    return Err("no server configured".to_string());
+                }
+            } else {
+                return Err("invalid conn_key".to_string());
+            }
+        } else {
+            return Err("invalid conn_key".to_string());
+        }
+    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({
+        "id": bridge_id,
+        "count": count.unwrap_or(5),
+        "mode": mode.unwrap_or_else(|| "tcp".to_string()),
+    });
+    let resp = client.post(format!("{}/api/bridge-ping", base_url))
+        .json(&body)
+        .send().await.map_err(|e| e.to_string())?;
+    let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(data)
+}
+
+#[tauri::command]
+async fn bridge_set_label(app: tauri::AppHandle, bridge_id: String, blacklisted: bool) -> Result<bool, String> {
+    let settings = get_app_settings(app)?;
+    let base_url = {
+        use base64::Engine as _;
+        let raw = settings.conn_key.trim_start_matches("whispera://");
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(raw) {
+            if let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                let srv = j["server"].as_str().unwrap_or("");
+                if !srv.is_empty() {
+                    let host = srv.split(':').next().unwrap_or("").to_string();
+                    let port: u16 = srv.split(':').nth(1).and_then(|s| s.parse().ok()).unwrap_or(8443);
+                    format!("https://{}:{}", host, port)
+                } else {
+                    return Err("no server configured".to_string());
+                }
+            } else {
+                return Err("invalid conn_key".to_string());
+            }
+        } else {
+            return Err("invalid conn_key".to_string());
+        }
+    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({"id": bridge_id, "blacklisted": blacklisted});
+    let resp = client.post(format!("{}/api/bridge-label", base_url))
+        .json(&body)
+        .send().await.map_err(|e| e.to_string())?;
+    Ok(resp.status().is_success())
+}
+
+#[tauri::command]
+async fn bridge_issue_ssh_key(app: tauri::AppHandle, bridge_id: String, user_id: String, one_time: bool, ttl_hours: u32) -> Result<serde_json::Value, String> {
+    let settings = get_app_settings(app)?;
+    let base_url = {
+        use base64::Engine as _;
+        let raw = settings.conn_key.trim_start_matches("whispera://");
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(raw) {
+            if let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                let srv = j["server"].as_str().unwrap_or("");
+                if !srv.is_empty() {
+                    let host = srv.split(':').next().unwrap_or("").to_string();
+                    let port: u16 = srv.split(':').nth(1).and_then(|s| s.parse().ok()).unwrap_or(8443);
+                    format!("https://{}:{}", host, port)
+                } else {
+                    return Err("no server configured".to_string());
+                }
+            } else {
+                return Err("invalid conn_key".to_string());
+            }
+        } else {
+            return Err("invalid conn_key".to_string());
+        }
+    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({
+        "bridge_id": bridge_id,
+        "user_id": user_id,
+        "one_time": one_time,
+        "ttl_hours": ttl_hours,
+    });
+    let resp = client.post(format!("{}/api/bridge-access-key", base_url))
+        .json(&body)
+        .send().await.map_err(|e| e.to_string())?;
+    let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(data)
+}
+
+#[tauri::command]
+async fn bridge_rollout(app: tauri::AppHandle, version: String, binary_url: String, checksum: String) -> Result<serde_json::Value, String> {
+    let settings = get_app_settings(app)?;
+    let base_url = {
+        use base64::Engine as _;
+        let raw = settings.conn_key.trim_start_matches("whispera://");
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(raw) {
+            if let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                let srv = j["server"].as_str().unwrap_or("");
+                if !srv.is_empty() {
+                    let host = srv.split(':').next().unwrap_or("").to_string();
+                    let port: u16 = srv.split(':').nth(1).and_then(|s| s.parse().ok()).unwrap_or(8443);
+                    format!("https://{}:{}", host, port)
+                } else {
+                    return Err("no server configured".to_string());
+                }
+            } else {
+                return Err("invalid conn_key".to_string());
+            }
+        } else {
+            return Err("invalid conn_key".to_string());
+        }
+    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({
+        "version": version,
+        "binary_url": binary_url,
+        "checksum": checksum,
+    });
+    let resp = client.post(format!("{}/api/bridge-rollout", base_url))
+        .json(&body)
+        .send().await.map_err(|e| e.to_string())?;
+    let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(data)
+}
+
+#[tauri::command]
+async fn p2p_disconnect() -> Result<bool, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    client.post(format!("{}/p2p/disconnect", &control_base(CONTROL_PORT_MAIN)))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn get_agent_stats() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(format!("{}/agent", &control_base(CONTROL_PORT_MAIN)))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn agent_recommend() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(format!("{}/agent/recommend", &control_base(CONTROL_PORT_MAIN)))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn agent_report(transport: String, server: String, success: bool, latency_ms: u64, error: Option<String>) -> Result<bool, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?;
+    client.post(format!("{}/agent/report", &control_base(CONTROL_PORT_MAIN)))
+        .json(&serde_json::json!({
+            "transport": transport,
+            "server": server,
+            "success": success,
+            "latency": latency_ms * 1_000_000,
+            "error": error.unwrap_or_default(),
+        }))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn set_connection_speed(id: String, rate_limit_kb: i64) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    client.post(conn_url(&id, "speed"))
+        .json(&serde_json::json!({"rate_limit_kb": rate_limit_kb}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn set_connection_sni(id: String, sni: String) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    client.post(conn_url(&id, "sni"))
+        .json(&serde_json::json!({"sni": sni}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn set_connection_bridge(id: String, bridge: String) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    client.post(conn_url(&id, "bridge"))
+        .json(&serde_json::json!({"bridge": bridge}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn duplicate_connection(id: String) -> Result<String, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.post(conn_url(&id, "duplicate"))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    let v: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(v["id"].as_str().unwrap_or("").to_string())
+}
+
+#[tauri::command]
+async fn change_connection_port(id: String, port: String) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    client.post(conn_url(&id, "port"))
+        .json(&serde_json::json!({"port": port}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn set_connection_mux(id: String, enabled: bool) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    client.post(conn_url(&id, "mux"))
+        .json(&serde_json::json!({"enabled": enabled}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn set_transport_secure(id: String, enabled: bool) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
+        .map_err(|e| e.to_string())?;
+    client.post(conn_url(&id, "transport_secure"))
+        .json(&serde_json::json!({"enabled": enabled}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn set_behavioral_profile(id: String, profile: String) -> Result<bool, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(3)).build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.post(conn_url(&id, "profile"))
+        .json(&serde_json::json!({"profile": profile}))
+        .send().await.map_err(|_| "control server unavailable".to_string())?;
+    if !resp.status().is_success() {
+        let msg = resp.text().await.unwrap_or_default();
+        return Err(format!("set_profile failed: {}", msg));
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+async fn encapsulate_connection(inner_id: String, outer_id: String) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(conn_url(&inner_id, "encapsulate"))
+        .json(&serde_json::json!({ "wrap_in": outer_id }))
+        .send().await
+        .map_err(|_| "control server unavailable".to_string())?;
+    if !resp.status().is_success() {
+        let msg = resp.text().await.unwrap_or_default();
+        return Err(format!("encapsulate failed: {}", msg));
+    }
+    resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]
@@ -418,7 +1068,7 @@ fn get_system_info() -> Result<SystemInfoResponse, String> {
     Ok(SystemInfoResponse {
         os: os_info,
         uptime,
-        version: "v0.1.3".to_string(),
+        version: format!("v{}", env!("CARGO_PKG_VERSION")),
         admin,
     })
 }
@@ -530,6 +1180,9 @@ async fn save_routing_rules(app: tauri::AppHandle, rules: Vec<RoutingRule>) -> R
         dns_redirect: settings.dns_redirect,
         ipv6: settings.ipv6,
         routing_rules: &routing_rules,
+        extra_socks_addrs: &[],
+        custom_dns: &settings.custom_dns,
+        tls_fingerprint: &settings.tls_fingerprint,
     });
     fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
 
@@ -586,6 +1239,9 @@ async fn save_blocklist(app: tauri::AppHandle, rules: Vec<RoutingRule>) -> Resul
         dns_redirect: settings.dns_redirect,
         ipv6: settings.ipv6,
         routing_rules: &routing_rules,
+        extra_socks_addrs: &[],
+        custom_dns: &settings.custom_dns,
+        tls_fingerprint: &settings.tls_fingerprint,
     });
     fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
 
@@ -616,6 +1272,9 @@ fn install_services(
             dns_redirect: settings.dns_redirect,
             ipv6: settings.ipv6,
             routing_rules: &[],
+            extra_socks_addrs: &[],
+            custom_dns: &settings.custom_dns,
+            tls_fingerprint: &settings.tls_fingerprint,
         });
         fs::write(&config_path, &stub).ok();
     }
@@ -639,6 +1298,10 @@ fn install_services(
             socks_addr: &socks_addr,
             kill_switch: settings.kill_switch,
             transport: &settings.ml_transport,
+            ml_server_url: "",
+            vpn_dns: &settings.vpn_dns,
+            mitm_enabled: settings.mitm_enabled,
+            spoof_ips: &settings.spoof_ips,
         })?;
     }
 
@@ -826,7 +1489,17 @@ fn ml_client() -> reqwest::Client {
 }
 
 fn ml_url(path: &str) -> String {
-    format!("https://127.0.0.1:8000{}", path)
+    let base = ML_ENDPOINT.lock().map(|s| s.clone()).unwrap_or_default();
+    if base.is_empty() {
+        format!("http://127.0.0.1:8000{}", path)
+    } else {
+        let trimmed = base.trim_end_matches('/');
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            format!("{}{}", trimmed, path)
+        } else {
+            format!("http://{}{}", trimmed, path)
+        }
+    }
 }
 
 fn ml_request(
@@ -844,15 +1517,18 @@ fn ml_request(
 }
 
 #[tauri::command]
+fn get_ml_api_token() -> String {
+    read_ml_api_token()
+}
+
+#[tauri::command]
 async fn get_ml_status(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    // First check managed subprocess
     {
         let mut ml = state.ml_server.lock().map_err(|e| e.to_string())?;
         if ml.is_running() {
             return Ok(true);
         }
     }
-    // Fallback: health check (covers externally started server)
     let ok = ml_client()
         .get(ml_url("/health"))
         .timeout(Duration::from_secs(2))
@@ -881,6 +1557,12 @@ fn stop_ml_server(state: tauri::State<AppState>) -> Result<String, String> {
 fn get_ml_logs(state: tauri::State<AppState>) -> Result<String, String> {
     let ml = state.ml_server.lock().map_err(|e| e.to_string())?;
     Ok(ml.get_log_tail(150))
+}
+
+#[tauri::command]
+fn clear_ml_logs(state: tauri::State<AppState>) -> Result<(), String> {
+    let ml = state.ml_server.lock().map_err(|e| e.to_string())?;
+    ml.clear_logs()
 }
 
 #[tauri::command]
@@ -937,6 +1619,62 @@ async fn ml_recommend_transport(server_host: String, server_port: u16) -> Result
 }
 
 #[tauri::command]
+async fn ml_export_dataset(app: tauri::AppHandle) -> Result<String, String> {
+    let client = ml_client();
+    let resp = ml_request(&client, reqwest::Method::GET, &ml_url("/federated/dataset"))
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|e| format!("ML server unavailable: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("ML server returned {}", resp.status()));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.is_empty() {
+        return Ok("Dataset is empty".to_string());
+    }
+
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let ds_dir = data_dir.join("datasets");
+    std::fs::create_dir_all(&ds_dir).ok();
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let filename = format!("whispera_ml_dataset_{}.jsonl", ts);
+    let path = ds_dir.join(&filename);
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+
+    let latest = ds_dir.join("whispera_ml_dataset_latest.jsonl");
+    std::fs::copy(&path, &latest).ok();
+
+    let lines = bytes.iter().filter(|&&b| b == b'\n').count();
+    Ok(format!(
+        "Exported {} samples ({:.1} MB) to {}",
+        lines,
+        bytes.len() as f64 / (1024.0 * 1024.0),
+        path.display()
+    ))
+}
+
+#[tauri::command]
+async fn ml_dataset_stats() -> Result<String, String> {
+    let client = ml_client();
+    let resp = ml_request(&client, reqwest::Method::GET, &ml_url("/federated/dataset/stats"))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("ML server unavailable: {}", e))?;
+    resp.text().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn uninstall_services(state: tauri::State<AppState>) -> Result<String, String> {
     {
         let mut mihomo_mgr = state.mihomo.lock().map_err(|e| e.to_string())?;
@@ -949,19 +1687,86 @@ fn uninstall_services(state: tauri::State<AppState>) -> Result<String, String> {
     Ok("Services removed".to_string())
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ProcessInfo {
+    name: String,
+    pid: u32,
+}
+
+#[tauri::command]
+fn list_processes() -> Vec<ProcessInfo> {
+    let mut result = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let out = std::process::Command::new("tasklist")
+            .args(["/FO", "CSV", "/NH"])
+            .creation_flags(0x08000000u32)
+            .output();
+        if let Ok(out) = out {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut seen = std::collections::HashSet::new();
+            for line in text.lines() {
+                let line = line.trim().trim_matches('"');
+                let parts: Vec<&str> = line.splitn(6, "\",\"").collect();
+                if parts.len() >= 2 {
+                    let name = parts[0].trim_matches('"').to_string();
+                    let pid: u32 = parts[1].trim_matches('"').parse().unwrap_or(0);
+                    if !name.is_empty() && seen.insert(name.to_lowercase()) {
+                        result.push(ProcessInfo { name, pid });
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let out = std::process::Command::new("ps")
+            .args(["-eo", "comm,pid", "--no-headers"])
+            .output();
+        if let Ok(out) = out {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut seen = std::collections::HashSet::new();
+            for line in text.lines() {
+                let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
+                if parts.len() == 2 {
+                    let name = parts[0].trim().to_string();
+                    let pid: u32 = parts[1].trim().parse().unwrap_or(0);
+                    if !name.is_empty() && seen.insert(name.to_lowercase()) {
+                        result.push(ProcessInfo { name, pid });
+                    }
+                }
+            }
+        }
+    }
+
+    result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    result
+}
+
 fn main() {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
 
+    #[cfg(target_os = "android")]
+    let mihomo_path = exe_dir.join("mihomo");
+    #[cfg(not(target_os = "android"))]
     let mihomo_path = exe_dir.join("mihomo.exe");
+
+    #[cfg(target_os = "android")]
+    let go_client_path = exe_dir.join("whispera-go-client");
+    #[cfg(not(target_os = "android"))]
     let go_client_path = exe_dir.join("whispera-go-client.exe");
 
-    #[cfg(dev)]
-    let ml_server_path = PathBuf::from("__dev_mode__/whispera-ml-server.exe");
-
-    #[cfg(not(dev))]
+    #[cfg(target_os = "android")]
+    let ml_server_path = PathBuf::new();
+    #[cfg(all(not(target_os = "android"), dev))]
+    let ml_server_path = exe_dir.join("whispera-ml-server.exe");
+    #[cfg(all(not(target_os = "android"), not(dev)))]
     let ml_server_path = {
         let candidate = exe_dir.join("whispera-ml-server.exe");
         if candidate.exists() {
@@ -979,15 +1784,51 @@ fn main() {
             mihomo: Mutex::new(MihomoManager::new(mihomo_path)),
             go_client: Mutex::new(GoClientManager::new(go_client_path)),
             ml_server: Mutex::new(MlServerManager::new(ml_server_path, ml_log_path)),
+            watchdog_specs: Mutex::new(Vec::new()),
         })
         .setup(|app| {
-            #[cfg(not(dev))]
-            {
-                let state: tauri::State<AppState> = app.state();
-                if let Ok(mut ml) = state.ml_server.lock() {
-                    ml.start().ok();
-                };
+            let state: tauri::State<AppState> = app.state();
+            let api_token = read_ml_api_token();
+            if let Ok(mut ml) = state.ml_server.lock() {
+                if !api_token.is_empty() {
+                    ml.set_token(&api_token);
+                }
+                ml.start().ok();
             }
+
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    // Collect specs without holding the State reference across await
+                    let specs: Vec<ExtraKeySpec> = {
+                        let state: tauri::State<AppState> = app_handle.state();
+                        let guard = match state.watchdog_specs.lock() {
+                            Ok(g) => g,
+                            Err(_) => continue,
+                        };
+                        let cloned = guard.clone();
+                        drop(guard);
+                        cloned
+                    };
+                    if specs.is_empty() { continue; }
+                    let n: usize = {
+                        let state: tauri::State<AppState> = app_handle.state();
+                        let x = match state.go_client.lock() {
+                            Ok(mut gc) => {
+                                let n = gc.check_and_restart_extras(&specs);
+                                drop(gc);
+                                n
+                            }
+                            Err(_) => 0,
+                        }; x
+                    };
+                    if n > 0 {
+                        eprintln!("[watchdog] restarted {} extra process(es)", n);
+                    }
+                }
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1002,8 +1843,10 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            list_processes,
             get_app_settings,
             save_app_setting,
+            patch_app_settings,
             connect,
             disconnect,
             get_status,
@@ -1021,19 +1864,48 @@ fn main() {
             get_ml_transport,
             connect_ml,
             get_ml_status,
+            get_ml_api_token,
             start_ml_server,
             stop_ml_server,
             get_ml_logs,
+            clear_ml_logs,
             ml_binary_exists,
             ml_rank_bridges,
             ml_analyze_network,
             ml_recommend_transport,
+            ml_export_dataset,
+            ml_dataset_stats,
             get_subscriptions,
             add_subscription,
             refresh_subscription,
             delete_subscription,
             rename_subscription,
             ping_key,
+            get_connections,
+            close_connection,
+            toggle_connection,
+            toggle_obfuscation,
+            switch_transport,
+            set_connection_speed,
+            set_connection_sni,
+            set_connection_bridge,
+            duplicate_connection,
+            set_connection_mux,
+            change_connection_port,
+            encapsulate_connection,
+            set_transport_secure,
+            set_behavioral_profile,
+            get_agent_stats,
+            agent_recommend,
+            agent_report,
+            p2p_status,
+            p2p_register,
+            p2p_connect,
+            p2p_disconnect,
+            bridge_ping,
+            bridge_set_label,
+            bridge_issue_ssh_key,
+            bridge_rollout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
