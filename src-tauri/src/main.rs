@@ -1121,12 +1121,44 @@ fn open_config_dir(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_external_url(url: &str) -> Result<(), String> {
+    if url.len() > 2048 {
+        return Err("url too long".into());
+    }
+    if url.chars().any(|c| c.is_control() || matches!(c, '"' | '\'' | '\\' | '\n' | '\r' | '\0')) {
+        return Err("url contains forbidden characters".into());
+    }
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")) {
+        return Err("url scheme not allowed".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
+    validate_external_url(&url)?;
+
     #[cfg(target_os = "windows")]
     {
+        // Empty "" is the window-title slot for `start`; keeping it prevents
+        // the URL from being interpreted as a title when it contains spaces.
         std::process::Command::new("cmd")
-            .args(["/c", "start", &url])
+            .args(["/c", "start", "", &url])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
