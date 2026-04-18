@@ -687,7 +687,7 @@ async fn bridge_ping(app: tauri::AppHandle, bridge_id: String, count: Option<u32
     };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .build()
         .map_err(|e| e.to_string())?;
     let body = serde_json::json!({
@@ -727,7 +727,7 @@ async fn bridge_set_label(app: tauri::AppHandle, bridge_id: String, blacklisted:
     };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .build()
         .map_err(|e| e.to_string())?;
     let body = serde_json::json!({"id": bridge_id, "blacklisted": blacklisted});
@@ -762,7 +762,7 @@ async fn bridge_issue_ssh_key(app: tauri::AppHandle, bridge_id: String, user_id:
     };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .build()
         .map_err(|e| e.to_string())?;
     let body = serde_json::json!({
@@ -803,7 +803,7 @@ async fn bridge_rollout(app: tauri::AppHandle, version: String, binary_url: Stri
     };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .build()
         .map_err(|e| e.to_string())?;
     let body = serde_json::json!({
@@ -1393,7 +1393,7 @@ fn save_subs(app: &tauri::AppHandle, subs: &[SubscriptionEntry]) {
 async fn fetch_sub_url(url: &str) -> Result<SubscriptionEntry, String> {
     use base64::Engine as _;
     let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .timeout(Duration::from_secs(12))
         .build()
         .map_err(|e| e.to_string())?;
@@ -1533,7 +1533,7 @@ fn read_ml_api_token() -> String {
 
 fn ml_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
