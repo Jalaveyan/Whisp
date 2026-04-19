@@ -1430,22 +1430,78 @@ fn save_subs(app: &tauri::AppHandle, subs: &[SubscriptionEntry]) {
     }
 }
 
+fn validate_subscription_url(url: &str) -> Result<(), String> {
+    if url.len() > 2048 {
+        return Err("url too long".into());
+    }
+    if url.chars().any(|c| c.is_control()) {
+        return Err("url contains control characters".into());
+    }
+    let lower = url.to_ascii_lowercase();
+    if !lower.starts_with("https://") {
+        return Err("only https:// subscription urls are accepted".into());
+    }
+    let after_scheme = &url[8..];
+    let host_end = after_scheme.find(|c: char| matches!(c, '/' | '?' | '#')).unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..host_end];
+    let host = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    let host_only = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    let bare = host_only.trim_start_matches('[').trim_end_matches(']');
+    if bare.is_empty() {
+        return Err("url host empty".into());
+    }
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        let blocked = match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                    || v4.is_broadcast() || v4.is_unspecified() || v4.is_multicast()
+                    || v4.octets()[0] == 0
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback() || v6.is_unspecified() || v6.is_multicast()
+                    || (v6.segments()[0] & 0xfe00) == 0xfc00
+                    || (v6.segments()[0] & 0xffc0) == 0xfe80
+            }
+        };
+        if blocked {
+            return Err("subscription host points to a private/loopback address".into());
+        }
+    } else {
+        let h = bare.to_ascii_lowercase();
+        if h == "localhost" || h.ends_with(".localhost") || h.ends_with(".local") || h.ends_with(".internal") {
+            return Err("subscription host points to a local address".into());
+        }
+    }
+    Ok(())
+}
+
+const SUB_MAX_BYTES: usize = 1024 * 1024;
+
 async fn fetch_sub_url(url: &str) -> Result<SubscriptionEntry, String> {
     use base64::Engine as _;
+    validate_subscription_url(url)?;
     let client = reqwest::Client::builder()
         .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .timeout(Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
-    let text = client
+    let resp = client
         .get(url)
         .header("User-Agent", "Whisp/1.0")
         .send()
         .await
-        .map_err(|e| format!("fetch failed: {}", e))?
-        .text()
-        .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("fetch failed: {}", e))?;
+    if let Some(len) = resp.content_length() {
+        if (len as usize) > SUB_MAX_BYTES {
+            return Err("subscription response too large".into());
+        }
+    }
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.len() > SUB_MAX_BYTES {
+        return Err("subscription response too large".into());
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(text.trim())
         .map_err(|e| format!("base64: {}", e))?;
