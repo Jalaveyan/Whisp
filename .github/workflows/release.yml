@@ -44,7 +44,7 @@ jobs:
               src-tauri/target/release/bundle/appimage/*.AppImage
               src-tauri/target/release/bundle/rpm/*.rpm
           - label: macos-x86_64
-            runner: macos-13
+            runner: macos-14
             triple: x86_64-apple-darwin
             ext: ""
             mihomo_asset: mihomo-darwin-amd64
