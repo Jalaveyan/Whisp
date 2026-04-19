@@ -4,7 +4,6 @@ use std::process::{Child, Command, Stdio};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(windows)]
 const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
