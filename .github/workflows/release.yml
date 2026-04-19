@@ -140,9 +140,12 @@ jobs:
           if-no-files-found: ignore
 
   # ── Android Build ──────────────────────────────────────────────────────────
+  # NOTE: Android build requires Tauri 2 mobile refactor (lib.rs + [lib] crate).
+  # Until that lands, this job is allowed to fail without blocking the release.
   build-android:
     name: Build Whisp (Android)
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
