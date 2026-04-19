@@ -20,6 +20,35 @@ use go_client::{ExtraKeySpec, GoClientConfig, GoClientManager};
 use mihomo::MihomoManager;
 use ml_server::MlServerManager;
 
+include!(concat!(env!("OUT_DIR"), "/sidecar_hashes.rs"));
+
+fn sidecar_sha256(path: &std::path::Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    Some(format!("{:x}", h.finalize()))
+}
+
+fn verify_sidecar(path: &std::path::Path) -> Result<(), String> {
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    let expected = SIDECAR_HASHES.iter().find(|(n, _)| *n == name).map(|(_, h)| *h);
+    let Some(expected) = expected else {
+        eprintln!("[sidecar] no baked hash for {} (skipping verification)", name);
+        return Ok(());
+    };
+    let actual = sidecar_sha256(path)
+        .ok_or_else(|| format!("sidecar {} not found", name))?;
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(format!(
+            "sidecar {} hash mismatch (expected {}, got {})",
+            name, expected, actual
+        ));
+    }
+    eprintln!("[sidecar] {} hash OK", name);
+    Ok(())
+}
+
 static ML_ENDPOINT: std::sync::LazyLock<Mutex<String>> =
     std::sync::LazyLock::new(|| Mutex::new(String::new()));
 
@@ -1968,6 +1997,13 @@ fn main() {
         }
     };
     let ml_log_path = exe_dir.join("ml-server.log");
+
+    for p in [&mihomo_path, &go_client_path] {
+        if let Err(e) = verify_sidecar(p) {
+            eprintln!("[sidecar] refusing to start: {}", e);
+            std::process::exit(1);
+        }
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

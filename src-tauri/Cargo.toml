@@ -9,6 +9,7 @@ edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+sha2 = "0.10"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -20,6 +21,7 @@ base64 = "0.22"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-shell = "2"
 keyring = "3"
+sha2 = "0.10"
 
 [features]
 default = ["custom-protocol"]
