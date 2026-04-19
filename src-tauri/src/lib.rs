@@ -2078,7 +2078,10 @@ pub fn run() {
                 state.mihomo.lock().ok().map(|mut m| m.stop().ok());
                 state.go_client.lock().ok().map(|mut gc| gc.stop().ok());
                 state.ml_server.lock().ok().map(|mut ml| ml.stop().ok());
+                #[cfg(desktop)]
                 window.close().ok();
+                #[cfg(not(desktop))]
+                let _ = window;
             }
         })
         .invoke_handler(tauri::generate_handler![
