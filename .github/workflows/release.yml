@@ -31,8 +31,8 @@ jobs:
             mihomo_asset: mihomo-windows-amd64
             mihomo_archive: zip
             bundle_glob: |
-              src-tauri/target/release/bundle/nsis/*.exe
-              src-tauri/target/release/bundle/msi/*.msi
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
           - label: linux-x86_64
             runner: ubuntu-latest
             triple: x86_64-unknown-linux-gnu
@@ -40,9 +40,9 @@ jobs:
             mihomo_asset: mihomo-linux-amd64
             mihomo_archive: gz
             bundle_glob: |
-              src-tauri/target/release/bundle/deb/*.deb
-              src-tauri/target/release/bundle/appimage/*.AppImage
-              src-tauri/target/release/bundle/rpm/*.rpm
+              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm
           - label: macos-x86_64
             runner: macos-14
             triple: x86_64-apple-darwin
@@ -50,8 +50,8 @@ jobs:
             mihomo_asset: mihomo-darwin-amd64
             mihomo_archive: gz
             bundle_glob: |
-              src-tauri/target/release/bundle/dmg/*.dmg
-              src-tauri/target/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
           - label: macos-aarch64
             runner: macos-14
             triple: aarch64-apple-darwin
@@ -59,8 +59,8 @@ jobs:
             mihomo_asset: mihomo-darwin-arm64
             mihomo_archive: gz
             bundle_glob: |
-              src-tauri/target/release/bundle/dmg/*.dmg
-              src-tauri/target/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
     steps:
       - uses: actions/checkout@v4
 
@@ -212,10 +212,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Tauri Android APK
+      - name: Build Tauri Android APK (debug, auto-signed)
         run: |
           export NDK_HOME="$ANDROID_NDK_HOME"
-          npx tauri android build --apk --target aarch64
+          npx tauri android build --apk --debug --target aarch64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -223,7 +223,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: whisp-android-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           retention-days: 5
 
 # ── GitHub Release ─────────────────────────────────────────────────────────
