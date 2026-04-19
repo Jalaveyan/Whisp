@@ -1630,10 +1630,12 @@ async fn ping_key(key: String) -> Result<u64, String> {
 const KEYRING_SERVICE: &str = "Whisp";
 const KEYRING_USER: &str = "ml_api_token";
 
+#[cfg(not(target_os = "android"))]
 fn keyring_entry() -> Option<keyring::Entry> {
     keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).ok()
 }
 
+#[cfg(not(target_os = "android"))]
 fn keyring_read_token() -> Option<String> {
     keyring_entry()?
         .get_password()
@@ -1642,6 +1644,7 @@ fn keyring_read_token() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+#[cfg(not(target_os = "android"))]
 fn keyring_write_token(token: &str) -> Result<(), String> {
     let entry = keyring_entry().ok_or_else(|| "keyring unavailable".to_string())?;
     if token.is_empty() {
@@ -1650,6 +1653,14 @@ fn keyring_write_token(token: &str) -> Result<(), String> {
     } else {
         entry.set_password(token).map_err(|e| e.to_string())
     }
+}
+
+#[cfg(target_os = "android")]
+fn keyring_read_token() -> Option<String> { None }
+
+#[cfg(target_os = "android")]
+fn keyring_write_token(_token: &str) -> Result<(), String> {
+    Err("keyring unavailable on android".to_string())
 }
 
 fn legacy_api_token_path() -> String {
