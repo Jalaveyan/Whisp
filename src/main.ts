@@ -1542,7 +1542,7 @@ function updateIPDOM(): void {
   const el = document.getElementById("ip-val");
   const loc = document.getElementById("loc-val");
   const prov = document.getElementById("prov-val");
-  if (el) el.innerHTML = `${ipInfo.ip} <span class="copy-icon" data-copy="${ipInfo.ip}">${ICONS.copy}</span>`;
+  if (el) el.innerHTML = `${esc(ipInfo.ip)} <span class="copy-icon" data-copy="${esc(ipInfo.ip)}">${ICONS.copy}</span>`;
   if (loc) loc.textContent = ipInfo.location;
   if (prov) prov.textContent = ipInfo.provider;
 }
@@ -3386,7 +3386,7 @@ function bindRoutingEvents(): void {
         setTimeout(() => search.focus(), 50);
       }
     } catch (e) {
-      inner.innerHTML = `<div style="padding:16px;color:var(--danger)">${e}</div>`;
+      inner.innerHTML = `<div style="padding:16px;color:var(--danger)">${esc(String(e))}</div>`;
     }
   });
 

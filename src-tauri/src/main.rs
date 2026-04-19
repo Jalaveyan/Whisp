@@ -20,6 +20,35 @@ use go_client::{ExtraKeySpec, GoClientConfig, GoClientManager};
 use mihomo::MihomoManager;
 use ml_server::MlServerManager;
 
+include!(concat!(env!("OUT_DIR"), "/sidecar_hashes.rs"));
+
+fn sidecar_sha256(path: &std::path::Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    Some(format!("{:x}", h.finalize()))
+}
+
+fn verify_sidecar(path: &std::path::Path) -> Result<(), String> {
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    let expected = SIDECAR_HASHES.iter().find(|(n, _)| *n == name).map(|(_, h)| *h);
+    let Some(expected) = expected else {
+        eprintln!("[sidecar] no baked hash for {} (skipping verification)", name);
+        return Ok(());
+    };
+    let actual = sidecar_sha256(path)
+        .ok_or_else(|| format!("sidecar {} not found", name))?;
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(format!(
+            "sidecar {} hash mismatch (expected {}, got {})",
+            name, expected, actual
+        ));
+    }
+    eprintln!("[sidecar] {} hash OK", name);
+    Ok(())
+}
+
 static ML_ENDPOINT: std::sync::LazyLock<Mutex<String>> =
     std::sync::LazyLock::new(|| Mutex::new(String::new()));
 
@@ -155,7 +184,14 @@ fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
     let path = settings_path(&app);
     if path.exists() {
         let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let settings: AppSettings = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        let mut settings: AppSettings = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        if !settings.ml_token.is_empty() {
+            let _ = keyring_write_token(&settings.ml_token);
+            settings.ml_token = String::new();
+            if let Ok(migrated) = serde_json::to_string_pretty(&settings) {
+                let _ = fs::write(&path, migrated);
+            }
+        }
         Ok(settings)
     } else {
         Ok(AppSettings::default())
@@ -172,7 +208,7 @@ fn save_app_setting(app: tauri::AppHandle, mut settings: AppSettings) -> Result<
                 settings.blocklist = existing.blocklist;
                 settings.ml_transport = existing.ml_transport;
                 settings.ml_server = existing.ml_server;
-                settings.ml_token = existing.ml_token;
+                settings.ml_token = String::new();
                 settings.extra_keys = existing.extra_keys;
                 if settings.custom_dns.is_empty() { settings.custom_dns = existing.custom_dns; }
                 if settings.p2p_relay_addr.is_empty() { settings.p2p_relay_addr = existing.p2p_relay_addr; }
@@ -272,7 +308,7 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
     let transport_to_use = if !ml_transport.is_empty() { &ml_transport } else { "" };
 
     let (ml_token_val, ml_server_val) = if key_enable_ml {
-        (settings.ml_token.clone(), ml_url(""))
+        (read_ml_api_token(), ml_url(""))
     } else {
         (String::new(), String::new())
     };
@@ -437,11 +473,12 @@ async fn connect_ml(
         Err(_) => String::new(),
     };
 
+    let _ = keyring_write_token(&token);
     let path = settings_path(&app);
     if let Ok(raw) = fs::read_to_string(&path) {
         if let Ok(mut s) = serde_json::from_str::<AppSettings>(&raw) {
             s.ml_server = server.clone();
-            s.ml_token = token.clone();
+            s.ml_token = String::new();
             s.ml_transport = ml_transport.clone();
             if let Ok(data) = serde_json::to_string_pretty(&s) { fs::write(&path, data).ok(); }
         }
@@ -687,7 +724,7 @@ async fn bridge_ping(app: tauri::AppHandle, bridge_id: String, count: Option<u32
     };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .build()
         .map_err(|e| e.to_string())?;
     let body = serde_json::json!({
@@ -727,7 +764,7 @@ async fn bridge_set_label(app: tauri::AppHandle, bridge_id: String, blacklisted:
     };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .build()
         .map_err(|e| e.to_string())?;
     let body = serde_json::json!({"id": bridge_id, "blacklisted": blacklisted});
@@ -762,7 +799,7 @@ async fn bridge_issue_ssh_key(app: tauri::AppHandle, bridge_id: String, user_id:
     };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .build()
         .map_err(|e| e.to_string())?;
     let body = serde_json::json!({
@@ -803,7 +840,7 @@ async fn bridge_rollout(app: tauri::AppHandle, version: String, binary_url: Stri
     };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .build()
         .map_err(|e| e.to_string())?;
     let body = serde_json::json!({
@@ -1121,12 +1158,44 @@ fn open_config_dir(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_external_url(url: &str) -> Result<(), String> {
+    if url.len() > 2048 {
+        return Err("url too long".into());
+    }
+    if url.chars().any(|c| c.is_control() || matches!(c, '"' | '\'' | '\\' | '\n' | '\r' | '\0')) {
+        return Err("url contains forbidden characters".into());
+    }
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")) {
+        return Err("url scheme not allowed".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
+    validate_external_url(&url)?;
+
     #[cfg(target_os = "windows")]
     {
+        // Empty "" is the window-title slot for `start`; keeping it prevents
+        // the URL from being interpreted as a title when it contains spaces.
         std::process::Command::new("cmd")
-            .args(["/c", "start", &url])
+            .args(["/c", "start", "", &url])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -1390,22 +1459,78 @@ fn save_subs(app: &tauri::AppHandle, subs: &[SubscriptionEntry]) {
     }
 }
 
+fn validate_subscription_url(url: &str) -> Result<(), String> {
+    if url.len() > 2048 {
+        return Err("url too long".into());
+    }
+    if url.chars().any(|c| c.is_control()) {
+        return Err("url contains control characters".into());
+    }
+    let lower = url.to_ascii_lowercase();
+    if !lower.starts_with("https://") {
+        return Err("only https:// subscription urls are accepted".into());
+    }
+    let after_scheme = &url[8..];
+    let host_end = after_scheme.find(|c: char| matches!(c, '/' | '?' | '#')).unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..host_end];
+    let host = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    let host_only = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    let bare = host_only.trim_start_matches('[').trim_end_matches(']');
+    if bare.is_empty() {
+        return Err("url host empty".into());
+    }
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        let blocked = match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                    || v4.is_broadcast() || v4.is_unspecified() || v4.is_multicast()
+                    || v4.octets()[0] == 0
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback() || v6.is_unspecified() || v6.is_multicast()
+                    || (v6.segments()[0] & 0xfe00) == 0xfc00
+                    || (v6.segments()[0] & 0xffc0) == 0xfe80
+            }
+        };
+        if blocked {
+            return Err("subscription host points to a private/loopback address".into());
+        }
+    } else {
+        let h = bare.to_ascii_lowercase();
+        if h == "localhost" || h.ends_with(".localhost") || h.ends_with(".local") || h.ends_with(".internal") {
+            return Err("subscription host points to a local address".into());
+        }
+    }
+    Ok(())
+}
+
+const SUB_MAX_BYTES: usize = 1024 * 1024;
+
 async fn fetch_sub_url(url: &str) -> Result<SubscriptionEntry, String> {
     use base64::Engine as _;
+    validate_subscription_url(url)?;
     let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .timeout(Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
-    let text = client
+    let resp = client
         .get(url)
         .header("User-Agent", "Whisp/1.0")
         .send()
         .await
-        .map_err(|e| format!("fetch failed: {}", e))?
-        .text()
-        .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("fetch failed: {}", e))?;
+    if let Some(len) = resp.content_length() {
+        if (len as usize) > SUB_MAX_BYTES {
+            return Err("subscription response too large".into());
+        }
+    }
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.len() > SUB_MAX_BYTES {
+        return Err("subscription response too large".into());
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(text.trim())
         .map_err(|e| format!("base64: {}", e))?;
@@ -1507,8 +1632,33 @@ async fn ping_key(key: String) -> Result<u64, String> {
     Ok(start.elapsed().as_millis() as u64)
 }
 
-fn read_ml_api_token() -> String {
-    let path = if cfg!(target_os = "windows") {
+const KEYRING_SERVICE: &str = "Whisp";
+const KEYRING_USER: &str = "ml_api_token";
+
+fn keyring_entry() -> Option<keyring::Entry> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).ok()
+}
+
+fn keyring_read_token() -> Option<String> {
+    keyring_entry()?
+        .get_password()
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn keyring_write_token(token: &str) -> Result<(), String> {
+    let entry = keyring_entry().ok_or_else(|| "keyring unavailable".to_string())?;
+    if token.is_empty() {
+        let _ = entry.delete_credential();
+        Ok(())
+    } else {
+        entry.set_password(token).map_err(|e| e.to_string())
+    }
+}
+
+fn legacy_api_token_path() -> String {
+    if cfg!(target_os = "windows") {
         std::env::var("APPDATA")
             .map(|a| format!(r"{}\Whispera\api_token", a))
             .unwrap_or_default()
@@ -1524,16 +1674,27 @@ fn read_ml_api_token() -> String {
                     .map(|h| format!("{}/.config/whispera/api_token", h))
                     .unwrap_or_default()
             })
-    };
+    }
+}
+
+fn read_ml_api_token() -> String {
+    if let Some(tok) = keyring_read_token() {
+        return tok;
+    }
+    let path = legacy_api_token_path();
     if path.is_empty() { return String::new(); }
-    std::fs::read_to_string(&path)
+    let tok = std::fs::read_to_string(&path)
         .map(|s| s.trim().to_string())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if !tok.is_empty() && keyring_write_token(&tok).is_ok() {
+        let _ = std::fs::remove_file(&path);
+    }
+    tok
 }
 
 fn ml_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
@@ -1569,6 +1730,16 @@ fn ml_request(
 #[tauri::command]
 fn get_ml_api_token() -> String {
     read_ml_api_token()
+}
+
+#[tauri::command]
+fn set_ml_api_token(token: String) -> Result<(), String> {
+    keyring_write_token(&token)?;
+    let legacy = legacy_api_token_path();
+    if !legacy.is_empty() {
+        let _ = std::fs::remove_file(&legacy);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1827,6 +1998,13 @@ fn main() {
     };
     let ml_log_path = exe_dir.join("ml-server.log");
 
+    for p in [&mihomo_path, &go_client_path] {
+        if let Err(e) = verify_sidecar(p) {
+            eprintln!("[sidecar] refusing to start: {}", e);
+            std::process::exit(1);
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -1916,6 +2094,7 @@ fn main() {
             connect_ml,
             get_ml_status,
             get_ml_api_token,
+            set_ml_api_token,
             start_ml_server,
             stop_ml_server,
             get_ml_logs,
