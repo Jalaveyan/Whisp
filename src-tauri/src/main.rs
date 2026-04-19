@@ -1837,14 +1837,17 @@ fn main() {
             watchdog_specs: Mutex::new(Vec::new()),
         })
         .setup(|app| {
-            let state: tauri::State<AppState> = app.state();
-            let api_token = read_ml_api_token();
-            if let Ok(mut ml) = state.ml_server.lock() {
-                if !api_token.is_empty() {
-                    ml.set_token(&api_token);
+            let ml_app = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let state: tauri::State<AppState> = ml_app.state();
+                let api_token = read_ml_api_token();
+                if let Ok(mut ml) = state.ml_server.lock() {
+                    if !api_token.is_empty() {
+                        ml.set_token(&api_token);
+                    }
+                    ml.start().ok();
                 }
-                ml.start().ok();
-            }
+            });
 
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
