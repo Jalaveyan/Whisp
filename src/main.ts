@@ -5109,15 +5109,17 @@ window.addEventListener("DOMContentLoaded", async () => {
   loadLang(); loadProfiles();
   await loadSettings();
   _mlTargetServer = localStorage.getItem("ml_target_server") || settings.ml_server || "";
-  try { _mlToken = await invoke<string>("get_ml_api_token"); } catch { /**/ }
+  await Promise.all([
+    loadSubscriptions(),
+    loadRoutingRules(),
+    loadBlocklist(),
+    checkStatus(),
+    invoke<string>("get_ml_api_token").then(t => { _mlToken = t; }).catch(() => {}),
+    invoke<boolean>("ml_binary_exists").then(v => { _mlBinaryExists = v; }).catch(() => {}),
+  ]);
   if (!_mlToken) _mlToken = localStorage.getItem("ml_token") || settings.ml_token || "";
-  await loadSubscriptions();
-  await loadRoutingRules();
-  await loadBlocklist();
-  await checkStatus();
-  try { _mlBinaryExists = await invoke<boolean>("ml_binary_exists"); } catch { /**/ }
-  try { _mlStatus = await invoke<boolean>("get_ml_status"); } catch { /**/ }
   renderShell();
+  invoke<boolean>("get_ml_status").then(v => { _mlStatus = v; updateHome(); }).catch(() => {});
   checkSites(); fetchIpInfo(); fetchSysInfo();
   startSubAutoCheck();
   setInterval(() => { if (isConnected && connectTime) tickUptime(); }, 1000);
