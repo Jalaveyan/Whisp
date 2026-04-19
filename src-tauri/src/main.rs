@@ -2017,9 +2017,10 @@ fn main() {
         .setup(|app| {
             let ml_app = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
-                let state: tauri::State<AppState> = ml_app.state();
                 let api_token = read_ml_api_token();
-                if let Ok(mut ml) = state.ml_server.lock() {
+                let state: tauri::State<AppState> = ml_app.state();
+                let lock_res = state.ml_server.lock();
+                if let Ok(mut ml) = lock_res {
                     if !api_token.is_empty() {
                         ml.set_token(&api_token);
                     }
