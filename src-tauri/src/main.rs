@@ -155,7 +155,14 @@ fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
     let path = settings_path(&app);
     if path.exists() {
         let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let settings: AppSettings = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        let mut settings: AppSettings = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        if !settings.ml_token.is_empty() {
+            let _ = keyring_write_token(&settings.ml_token);
+            settings.ml_token = String::new();
+            if let Ok(migrated) = serde_json::to_string_pretty(&settings) {
+                let _ = fs::write(&path, migrated);
+            }
+        }
         Ok(settings)
     } else {
         Ok(AppSettings::default())
@@ -172,7 +179,7 @@ fn save_app_setting(app: tauri::AppHandle, mut settings: AppSettings) -> Result<
                 settings.blocklist = existing.blocklist;
                 settings.ml_transport = existing.ml_transport;
                 settings.ml_server = existing.ml_server;
-                settings.ml_token = existing.ml_token;
+                settings.ml_token = String::new();
                 settings.extra_keys = existing.extra_keys;
                 if settings.custom_dns.is_empty() { settings.custom_dns = existing.custom_dns; }
                 if settings.p2p_relay_addr.is_empty() { settings.p2p_relay_addr = existing.p2p_relay_addr; }
@@ -272,7 +279,7 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
     let transport_to_use = if !ml_transport.is_empty() { &ml_transport } else { "" };
 
     let (ml_token_val, ml_server_val) = if key_enable_ml {
-        (settings.ml_token.clone(), ml_url(""))
+        (read_ml_api_token(), ml_url(""))
     } else {
         (String::new(), String::new())
     };
@@ -437,11 +444,12 @@ async fn connect_ml(
         Err(_) => String::new(),
     };
 
+    let _ = keyring_write_token(&token);
     let path = settings_path(&app);
     if let Ok(raw) = fs::read_to_string(&path) {
         if let Ok(mut s) = serde_json::from_str::<AppSettings>(&raw) {
             s.ml_server = server.clone();
-            s.ml_token = token.clone();
+            s.ml_token = String::new();
             s.ml_transport = ml_transport.clone();
             if let Ok(data) = serde_json::to_string_pretty(&s) { fs::write(&path, data).ok(); }
         }
@@ -1539,8 +1547,33 @@ async fn ping_key(key: String) -> Result<u64, String> {
     Ok(start.elapsed().as_millis() as u64)
 }
 
-fn read_ml_api_token() -> String {
-    let path = if cfg!(target_os = "windows") {
+const KEYRING_SERVICE: &str = "Whisp";
+const KEYRING_USER: &str = "ml_api_token";
+
+fn keyring_entry() -> Option<keyring::Entry> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).ok()
+}
+
+fn keyring_read_token() -> Option<String> {
+    keyring_entry()?
+        .get_password()
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn keyring_write_token(token: &str) -> Result<(), String> {
+    let entry = keyring_entry().ok_or_else(|| "keyring unavailable".to_string())?;
+    if token.is_empty() {
+        let _ = entry.delete_credential();
+        Ok(())
+    } else {
+        entry.set_password(token).map_err(|e| e.to_string())
+    }
+}
+
+fn legacy_api_token_path() -> String {
+    if cfg!(target_os = "windows") {
         std::env::var("APPDATA")
             .map(|a| format!(r"{}\Whispera\api_token", a))
             .unwrap_or_default()
@@ -1556,11 +1589,22 @@ fn read_ml_api_token() -> String {
                     .map(|h| format!("{}/.config/whispera/api_token", h))
                     .unwrap_or_default()
             })
-    };
+    }
+}
+
+fn read_ml_api_token() -> String {
+    if let Some(tok) = keyring_read_token() {
+        return tok;
+    }
+    let path = legacy_api_token_path();
     if path.is_empty() { return String::new(); }
-    std::fs::read_to_string(&path)
+    let tok = std::fs::read_to_string(&path)
         .map(|s| s.trim().to_string())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if !tok.is_empty() && keyring_write_token(&tok).is_ok() {
+        let _ = std::fs::remove_file(&path);
+    }
+    tok
 }
 
 fn ml_client() -> reqwest::Client {
@@ -1601,6 +1645,16 @@ fn ml_request(
 #[tauri::command]
 fn get_ml_api_token() -> String {
     read_ml_api_token()
+}
+
+#[tauri::command]
+fn set_ml_api_token(token: String) -> Result<(), String> {
+    keyring_write_token(&token)?;
+    let legacy = legacy_api_token_path();
+    if !legacy.is_empty() {
+        let _ = std::fs::remove_file(&legacy);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1948,6 +2002,7 @@ fn main() {
             connect_ml,
             get_ml_status,
             get_ml_api_token,
+            set_ml_api_token,
             start_ml_server,
             stop_ml_server,
             get_ml_logs,
