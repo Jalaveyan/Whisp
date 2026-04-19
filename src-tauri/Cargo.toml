@@ -24,8 +24,10 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 base64 = "0.22"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-shell = "2"
-keyring = "3"
 sha2 = "0.10"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+keyring = "3"
 
 [features]
 default = ["custom-protocol"]
