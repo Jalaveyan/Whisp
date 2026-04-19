@@ -1,6 +1,13 @@
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
+#[derive(Clone)]
+pub struct ExtraKeySpec {
+    pub key: String,
+    pub socks_port: u16,
+    pub ctrl_port: u16,
+}
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -16,20 +23,20 @@ pub struct GoClientManager {
     binary_path: PathBuf,
     process: Option<Child>,
     use_service: bool,
+    extra_processes: Vec<Child>,
 }
 
 pub struct GoClientConfig<'a> {
-    /// Full whispera:// connection key — used in normal mode.
-    /// Leave empty when using server_addr + ml_token (ML mode).
     pub conn_key: &'a str,
-    /// server host:port — used in ML mode (when conn_key is empty).
     pub server_addr: &'a str,
-    /// ML auth token — passed as -phantom-key PSK in ML mode.
     pub ml_token: &'a str,
     pub socks_addr: &'a str,
     pub kill_switch: bool,
-    /// ML-recommended transport (e.g. "tcp", "vkwebrtc", "meek", "shadowsocks").
     pub transport: &'a str,
+    pub ml_server_url: &'a str,
+    pub vpn_dns: &'a str,
+    pub mitm_enabled: bool,
+    pub spoof_ips: &'a str,
 }
 
 impl GoClientManager {
@@ -38,24 +45,114 @@ impl GoClientManager {
             binary_path,
             process: None,
             use_service: false,
+            extra_processes: Vec::new(),
         }
     }
 
-    /// Install Windows Service for whispera-go-client.
-    /// Must be called with admin rights (e.g. from installer).
+    fn spawn_extra_child(
+        &self,
+        conn_key: &str,
+        socks_port: u16,
+        control_port: u16,
+    ) -> Result<Child, String> {
+        let log_path =
+            std::env::temp_dir().join(format!("whispera-go-client-extra-{}.log", socks_port));
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map(Stdio::from)
+            .unwrap_or(Stdio::null());
+        let log_file2 = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map(Stdio::from)
+            .unwrap_or(Stdio::null());
+
+        let mut cmd = Command::new(&self.binary_path);
+        cmd.arg("-key")
+            .arg(conn_key)
+            .arg("-socks")
+            .arg(format!("127.0.0.1:{}", socks_port))
+            .arg("-control-port")
+            .arg(control_port.to_string())
+            .arg("-no-tun")
+            .stdout(log_file)
+            .stderr(log_file2);
+
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
+
+        cmd.spawn()
+            .map_err(|e| format!("spawn extra client: {}", e))
+    }
+
+    pub fn start_extra(
+        &mut self,
+        conn_key: &str,
+        socks_port: u16,
+        control_port: u16,
+    ) -> Result<(), String> {
+        let child = self.spawn_extra_child(conn_key, socks_port, control_port)?;
+        self.extra_processes.push(child);
+        Ok(())
+    }
+
+    /// Check all extra processes; restart any that have exited. Returns number restarted.
+    pub fn check_and_restart_extras(&mut self, specs: &[ExtraKeySpec]) -> usize {
+        let mut restarted = 0;
+        for i in 0..self.extra_processes.len() {
+            let dead = matches!(self.extra_processes[i].try_wait(), Ok(Some(_)));
+            if dead {
+                if let Some(spec) = specs.get(i) {
+                    match self.spawn_extra_child(&spec.key, spec.socks_port, spec.ctrl_port) {
+                        Ok(new_child) => {
+                            self.extra_processes[i] = new_child;
+                            restarted += 1;
+                            eprintln!(
+                                "[watchdog] restarted extra process {} (socks:{})",
+                                i, spec.socks_port
+                            );
+                        }
+                        Err(e) => eprintln!("[watchdog] restart failed for extra {}: {}", i, e),
+                    }
+                }
+            }
+        }
+        restarted
+    }
+
+    pub fn extra_control_port(idx: usize) -> u16 {
+        10802u16 + idx as u16
+    }
+
+    pub fn stop_extras(&mut self) {
+        for mut child in self.extra_processes.drain(..) {
+            child.kill().ok();
+            child.wait().ok();
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn extra_socks_addrs(count: usize) -> Vec<String> {
+        (0..count)
+            .map(|i| format!("127.0.0.1:{}", 10900 + i))
+            .collect()
+    }
+
     pub fn install_service(&self, cfg: &GoClientConfig) -> Result<(), String> {
         let bin = self.binary_path.to_string_lossy().to_string();
 
         let key_part = if !cfg.conn_key.is_empty() {
             format!("-key \"{}\"", cfg.conn_key)
         } else {
-            let mut s = format!("-server \"{}\"", cfg.server_addr);
-            if !cfg.ml_token.is_empty() {
-                s.push_str(&format!(" -user-key \"{}\"", cfg.ml_token));
-            }
-            s
+            format!("-server \"{}\"", cfg.server_addr)
         };
         let mut args = format!("{} -socks \"{}\" -no-tun", key_part, cfg.socks_addr);
+        if !cfg.ml_token.is_empty() {
+            args.push_str(&format!(" -ml-token \"{}\"", cfg.ml_token));
+        }
         if cfg.kill_switch {
             args.push_str(" -kill-switch");
         }
@@ -65,7 +162,6 @@ impl GoClientManager {
 
         let bin_path = format!("\"{}\" {}", bin.replace('"', "\\\""), args);
 
-        // Delete existing service if present
         let _ = Command::new("sc")
             .args(["delete", SERVICE_NAME])
             .creation_flags_win(CREATE_NO_WINDOW)
@@ -95,7 +191,6 @@ impl GoClientManager {
             return Err(format!("Service install failed: {}", err));
         }
 
-        // Set description
         let _ = Command::new("sc")
             .args([
                 "description",
@@ -125,7 +220,6 @@ impl GoClientManager {
             .output()
             .map_err(|e| e.to_string())?;
 
-        // 1060 = service not installed, 1056 = already running — both OK to continue
         if out.status.success()
             || String::from_utf8_lossy(&out.stdout).contains("RUNNING")
             || String::from_utf8_lossy(&out.stderr).contains("1056")
@@ -146,9 +240,7 @@ impl GoClientManager {
             .creation_flags_win(CREATE_NO_WINDOW)
             .output()
             .ok();
-        // Give SCM time to stop
         std::thread::sleep(std::time::Duration::from_millis(1500));
-        // Force-kill if still running
         Command::new("taskkill")
             .args(["/F", "/IM", "whispera-go-client.exe"])
             .creation_flags_win(CREATE_NO_WINDOW)
@@ -159,38 +251,49 @@ impl GoClientManager {
     }
 
     pub fn start(&mut self, cfg: &GoClientConfig) -> Result<(), String> {
+        eprintln!(
+            "[go_client] start() called, binary={}",
+            self.binary_path.display()
+        );
+
         if self.is_running() {
-            self.stop()?;
+            eprintln!("[go_client] already running — keeping existing tunnel alive");
+            return Ok(());
         }
 
-        // Try service first if it appears to be registered
+        self.stop()?;
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
         if service_exists(SERVICE_NAME) {
-            // Update service binary path with new config (re-install)
-            if self.install_service(cfg).is_ok() {
-                if self.start_service().is_ok() {
-                    return Ok(());
-                }
+            eprintln!("[go_client] service exists, trying service mode");
+            if self.install_service(cfg).is_ok() && self.start_service().is_ok() {
+                eprintln!("[go_client] started as service OK");
+                return Ok(());
             }
+            eprintln!("[go_client] service mode failed, falling back to direct");
         }
 
-        // Fall back to direct spawn with hidden window + low priority
         self.start_direct(cfg)
     }
 
     fn start_direct(&mut self, cfg: &GoClientConfig) -> Result<(), String> {
+        eprintln!(
+            "[go_client] start_direct: binary={}, exists={}",
+            self.binary_path.display(),
+            self.binary_path.exists()
+        );
         let mut cmd = Command::new(&self.binary_path);
 
         if !cfg.conn_key.is_empty() {
-            // Normal mode: full whispera:// key
             cmd.arg("-key").arg(cfg.conn_key);
         } else if !cfg.server_addr.is_empty() {
-            // ML mode: server address + optional user PSK token
             cmd.arg("-server").arg(cfg.server_addr);
-            if !cfg.ml_token.is_empty() {
-                cmd.arg("-user-key").arg(cfg.ml_token);
-            }
         } else {
             return Err("No connection key or server address provided".to_string());
+        }
+
+        if !cfg.ml_token.is_empty() {
+            cmd.arg("-ml-token").arg(cfg.ml_token);
         }
 
         cmd.arg("-socks").arg(cfg.socks_addr);
@@ -204,11 +307,23 @@ impl GoClientManager {
             cmd.arg("-transport").arg(cfg.transport);
         }
 
-        let log_path = self
-            .binary_path
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("go-client.log");
+        if !cfg.ml_server_url.is_empty() {
+            cmd.arg("-ml-server").arg(cfg.ml_server_url);
+        }
+
+        if !cfg.vpn_dns.is_empty() {
+            cmd.arg("-dns").arg(cfg.vpn_dns);
+        }
+
+        if cfg.mitm_enabled {
+            cmd.arg("-mitm");
+        }
+
+        if !cfg.spoof_ips.is_empty() {
+            cmd.arg("-spoof-ips").arg(cfg.spoof_ips);
+        }
+
+        let log_path = std::env::temp_dir().join("whispera-go-client.log");
         let log_file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -245,7 +360,23 @@ impl GoClientManager {
             child.wait().ok();
         }
         self.process = None;
+        // Always blanket-kill to clean up orphaned processes from previous sessions
+        // (e.g. Tauri crashed without calling stop, or dev-mode restart).
+        self.kill_all_by_name();
         Ok(())
+    }
+
+    /// Kill all whispera-go-client processes by image name (orphan cleanup).
+    /// Use only during full disconnect or shutdown, not during reconnect.
+    pub fn kill_all_by_name(&self) {
+        #[cfg(windows)]
+        {
+            Command::new("taskkill")
+                .args(["/F", "/IM", "whispera-go-client.exe"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+                .ok();
+        }
     }
 
     pub fn is_running(&mut self) -> bool {
@@ -268,11 +399,11 @@ impl GoClientManager {
 
 impl Drop for GoClientManager {
     fn drop(&mut self) {
+        self.stop_extras();
         self.stop().ok();
+        self.kill_all_by_name();
     }
 }
-
-// ── helpers ──────────────────────────────────────────────────────────────────
 
 fn service_exists(name: &str) -> bool {
     Command::new("sc")
@@ -292,7 +423,6 @@ fn service_running(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-// Extension trait to allow cross-platform compilation
 trait CommandExtWin {
     fn creation_flags_win(&mut self, flags: u32) -> &mut Self;
 }

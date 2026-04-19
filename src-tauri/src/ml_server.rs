@@ -13,6 +13,8 @@ pub struct MlServerManager {
     binary_path: PathBuf,
     log_path: PathBuf,
     process: Option<Child>,
+    listen_addr: String,
+    token: String,
 }
 
 impl MlServerManager {
@@ -21,7 +23,20 @@ impl MlServerManager {
             binary_path,
             log_path,
             process: None,
+            listen_addr: "127.0.0.1:8000".to_string(),
+            token: String::new(),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn set_listen_addr(&mut self, addr: &str) {
+        if !addr.is_empty() {
+            self.listen_addr = addr.to_string();
+        }
+    }
+
+    pub fn set_token(&mut self, token: &str) {
+        self.token = token.to_string();
     }
 
     pub fn start(&mut self) -> Result<(), String> {
@@ -49,6 +64,10 @@ impl MlServerManager {
             .unwrap_or(Stdio::null());
 
         let mut cmd = Command::new(&self.binary_path);
+        cmd.args(["--listen", &self.listen_addr]);
+        if !self.token.is_empty() {
+            cmd.args(["--token", &self.token]);
+        }
         cmd.stdout(log_out).stderr(log_err);
 
         #[cfg(windows)]
@@ -104,6 +123,15 @@ impl MlServerManager {
         } else {
             String::new()
         }
+    }
+
+    pub fn clear_logs(&self) -> Result<(), String> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&self.log_path)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     pub fn binary_exists(&self) -> bool {
