@@ -2005,6 +2005,7 @@ pub fn run() {
     };
     let ml_log_path = exe_dir.join("ml-server.log");
 
+    #[cfg(not(target_os = "android"))]
     for p in [&mihomo_path, &go_client_path] {
         if let Err(e) = verify_sidecar(p) {
             eprintln!("[sidecar] refusing to start: {}", e);
@@ -2022,18 +2023,21 @@ pub fn run() {
             watchdog_specs: Mutex::new(Vec::new()),
         })
         .setup(|app| {
-            let ml_app = app.handle().clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                let api_token = read_ml_api_token();
-                let state: tauri::State<AppState> = ml_app.state();
-                let lock_res = state.ml_server.lock();
-                if let Ok(mut ml) = lock_res {
-                    if !api_token.is_empty() {
-                        ml.set_token(&api_token);
+            #[cfg(not(target_os = "android"))]
+            {
+                let ml_app = app.handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let api_token = read_ml_api_token();
+                    let state: tauri::State<AppState> = ml_app.state();
+                    let lock_res = state.ml_server.lock();
+                    if let Ok(mut ml) = lock_res {
+                        if !api_token.is_empty() {
+                            ml.set_token(&api_token);
+                        }
+                        ml.start().ok();
                     }
-                    ml.start().ok();
-                }
-            });
+                });
+            }
 
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
