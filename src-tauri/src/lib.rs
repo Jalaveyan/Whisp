@@ -1980,27 +1980,29 @@ pub fn run() {
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
 
-    #[cfg(target_os = "android")]
-    let mihomo_path = exe_dir.join("mihomo");
-    #[cfg(not(target_os = "android"))]
-    let mihomo_path = exe_dir.join("mihomo.exe");
+    // .exe suffix только для Windows. Tauri sidecars на macOS/Linux/Android
+    // ставятся без расширения. До этого фикса клиент на не-Windows не находил
+    // ни mihomo, ни go-client, ни ml-server — verify_sidecar() падал и через
+    // std::process::exit(1) убивал app.
+    #[cfg(target_os = "windows")]
+    const EXE_EXT: &str = ".exe";
+    #[cfg(not(target_os = "windows"))]
+    const EXE_EXT: &str = "";
 
-    #[cfg(target_os = "android")]
-    let go_client_path = exe_dir.join("whispera-go-client");
-    #[cfg(not(target_os = "android"))]
-    let go_client_path = exe_dir.join("whispera-go-client.exe");
+    let mihomo_path = exe_dir.join(format!("mihomo{}", EXE_EXT));
+    let go_client_path = exe_dir.join(format!("whispera-go-client{}", EXE_EXT));
 
     #[cfg(target_os = "android")]
     let ml_server_path = PathBuf::new();
     #[cfg(all(not(target_os = "android"), dev))]
-    let ml_server_path = exe_dir.join("whispera-ml-server.exe");
+    let ml_server_path = exe_dir.join(format!("whispera-ml-server{}", EXE_EXT));
     #[cfg(all(not(target_os = "android"), not(dev)))]
     let ml_server_path = {
-        let candidate = exe_dir.join("whispera-ml-server.exe");
+        let candidate = exe_dir.join(format!("whispera-ml-server{}", EXE_EXT));
         if candidate.exists() {
             candidate
         } else {
-            exe_dir.join("_up_").join("whispera-ml-server.exe")
+            exe_dir.join("_up_").join(format!("whispera-ml-server{}", EXE_EXT))
         }
     };
     let ml_log_path = exe_dir.join("ml-server.log");
