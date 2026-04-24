@@ -90,6 +90,34 @@ body.theme-light {
   margin: 0; padding: 0; box-sizing: border-box;
 }
 
+/* Базовый dark-стиль для ВСЕХ button/input без явного оформления.
+   На Android WebView дефолтные кнопки/поля белые — без этого выглядят чуждо. */
+button {
+  font-family: inherit;
+  color: var(--md-on-surface);
+  background: var(--md-surface-high);
+  border: 1px solid var(--md-outline-var);
+  border-radius: var(--s-sm);
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:focus { outline: none; }
+
+input, textarea, select {
+  font-family: inherit;
+  color: var(--md-on-surface);
+  background: var(--md-surface-mid);
+  border: 1px solid var(--md-outline-var);
+  border-radius: var(--s-sm);
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--md-primary);
+}
+
 body {
   font-family: var(--f);
   background: var(--md-bg);
@@ -1764,5 +1792,21 @@ body {
   body, #app {
     overflow-x: hidden;
     max-width: 100vw;
+  }
+
+  /* Add-rule: input на свою строку, пилюли + "+" на следующую */
+  .rule-add-row > #rule-input-wrap {
+    flex: 1 1 100%;
+  }
+
+  /* Большие тач-таргеты для inputs (минимум 16px чтобы iOS не зумил) */
+  input, textarea, select {
+    font-size: 16px;
+    padding: 8px 12px;
+  }
+
+  /* Bridge tabs: компактнее */
+  .bridge-toolbar {
+    flex-wrap: wrap;
   }
 }
