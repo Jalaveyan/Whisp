@@ -1679,12 +1679,21 @@ body {
 
 /* ══════════════════════════════════════════════════════════════
    MOBILE LAYOUT  (≤ 600px)
-   - Sidebar превращается в off-canvas drawer
-   - Бургер-кнопка видна только здесь
-   - Overlay гасит контент когда drawer открыт
+
+   Архитектура:
+   ┌─────────────────────────────────┐
+   │ [≡]  app-bar (fixed, top)       │ ← solid bg, контент скроллится ПОД ней
+   ├─────────────────────────────────┤
+   │ main-content (padding-top: 64)  │
+   │  ┌────────────────────────────┐ │
+   │  │ card                       │ │
+   │  └────────────────────────────┘ │
+   │  ...                            │
+   └─────────────────────────────────┘
+   sidebar — fixed off-canvas, выезжает поверх app-bar по тапу на бургер.
 ══════════════════════════════════════════════════════════════ */
 
-.burger {
+.app-bar {
   display: none; /* скрыта на десктопе */
 }
 
@@ -1693,35 +1702,49 @@ body {
 }
 
 @media (max-width: 600px) {
+  /* ── Top App Bar ──────────────────────────────────────── */
+  .app-bar {
+    display: flex;
+    align-items: center;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    padding: 0 8px;
+    background: var(--md-surface);
+    border-bottom: 1px solid var(--md-outline-var);
+    z-index: 200;
+  }
+
   .burger {
     display: flex;
-    position: fixed;
-    top: 10px;
-    left: 10px;
-    z-index: 200;
     width: 44px;
     height: 44px;
     align-items: center;
     justify-content: center;
-    background: var(--md-surface-high);
-    border: 1px solid var(--md-outline-var);
+    background: transparent;
+    border: none;
     border-radius: 50%;
     color: var(--md-on-surface);
     cursor: pointer;
-    box-shadow: var(--elev-2);
+    padding: 0;
   }
-
+  .burger:active {
+    background: var(--md-secondary-cont);
+  }
   .burger svg {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
   }
 
+  /* ── Off-canvas Drawer ───────────────────────────────── */
   .sidebar {
     position: fixed;
     top: 0;
     left: 0;
     height: 100vh;
-    z-index: 150;
+    z-index: 250; /* поверх app-bar */
     transform: translateX(-100%);
     transition: transform var(--tr);
   }
@@ -1735,7 +1758,7 @@ body {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
-    z-index: 140;
+    z-index: 240;
     opacity: 0;
     pointer-events: none;
     transition: opacity var(--tr);
@@ -1746,32 +1769,48 @@ body {
     pointer-events: auto;
   }
 
+  /* ── Контент — отступ под app-bar ─────────────────────── */
   .main-content {
-    padding: 60px 10px 10px; /* top 60px — место под бургер */
+    padding: 64px 10px 10px;
     width: 100vw;
   }
 
-  /* Плотнее карточки на узком экране */
+  /* Page title — без хака под бургер, app-bar его прикроет */
+  .page-title {
+    padding-left: 0;
+    font-size: 22px; /* было 28-32 — на узком экране 22 не переносится */
+    line-height: 1.2;
+  }
+  .page-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  /* ── Cards — поджатые ────────────────────────────────── */
   .card {
     padding: 10px 11px;
   }
 
-  /* Card-header переносится если заголовок + кнопки не влезают в одну строку */
+  /* Card-header: title растёт-сжимается, всё остальное (кнопки, action-divs)
+     не сжимается; если не помещается — переносится под заголовок.
+     Внутренние ряды кнопок тоже умеют wrap. */
   .card-header {
     flex-wrap: wrap;
     gap: 6px;
+    align-items: center;
   }
-  .card-title {
+  .card-header > .card-title {
+    flex: 1 1 auto;
     min-width: 0;
-    flex-shrink: 1;
+  }
+  .card-header > *:not(.card-title) {
+    flex: 0 0 auto;
+    max-width: 100%;
+    flex-wrap: wrap; /* если это сам по себе flex-row кнопок — пусть переносит */
   }
 
-  /* Заголовок страницы — отступ под бургер */
-  .page-title {
-    padding-left: 52px;
-  }
-
-  /* Чипы типов правила переносятся на 2 строки вместо горизонт. скролла */
+  /* ── Chip rows — обязательный wrap ───────────────────── */
   .rule-type-bar {
     display: flex;
     flex-wrap: wrap;
@@ -1783,20 +1822,12 @@ body {
     text-align: center;
   }
 
-  /* Пилюли действий (Напрямую/Прокси/Блок) — wrap при нехватке места */
   .pill-group {
     flex-wrap: wrap;
   }
 
-  /* Запрет горизонтального скролла на root */
-  body, #app {
-    overflow-x: hidden;
-    max-width: 100vw;
-  }
-
-  /* Add-rule: input на свою строку, пилюли + "+" на следующую.
-     !important нужен потому что в HTML на #rule-input-wrap висит
-     inline style="flex:1" — inline-стили побеждают по специфичности. */
+  /* ── Add-rule: input на свою строку, пилюли + '+' ниже.
+     !important побеждает inline style="flex:1" в шаблоне. */
   .rule-add-row > #rule-input-wrap {
     flex: 1 1 100% !important;
     width: 100%;
@@ -1808,14 +1839,27 @@ body {
     flex: 0 0 auto;
   }
 
-  /* Большие тач-таргеты для inputs (минимум 16px чтобы iOS не зумил) */
+  /* ── Inputs / forms: 16px чтобы iOS не зумил ──────────── */
   input, textarea, select {
     font-size: 16px;
     padding: 8px 12px;
   }
 
-  /* Bridge tabs: компактнее */
+  /* ── Bridges toolbar wraps ───────────────────────────── */
   .bridge-toolbar {
     flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* ── Защита от горизонтального скролла ───────────────── */
+  body, #app {
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+
+  /* ── Setting rows: лейбл + value на одной строке wrap ── */
+  .setting-row {
+    flex-wrap: wrap;
+    gap: 6px;
   }
 }
