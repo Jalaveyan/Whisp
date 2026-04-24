@@ -4714,6 +4714,16 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-shell",
  "tokio",
+ "whisp-vpn-android",
+]
+
+[[package]]
+name = "whisp-vpn-android"
+version = "0.1.0"
+dependencies = [
+ "jni",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

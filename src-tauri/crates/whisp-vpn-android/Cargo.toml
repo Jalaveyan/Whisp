@@ -1,0 +1,24 @@
+[package]
+name = "whisp-vpn-android"
+version = "0.1.0"
+edition = "2021"
+description = "Whisp VPN core for Android — JNI bindings around a Rust rules/transport engine, driven by android.net.VpnService."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# JNI — бридж между Android/Kotlin и Rust. Активируется только когда
+# мы реально целимся в android (android feature или target_os=android).
+jni = { version = "0.21", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
+[features]
+default = []
+jni-bindings = ["jni"]
