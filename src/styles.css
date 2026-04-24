@@ -1794,9 +1794,18 @@ body {
     max-width: 100vw;
   }
 
-  /* Add-rule: input на свою строку, пилюли + "+" на следующую */
+  /* Add-rule: input на свою строку, пилюли + "+" на следующую.
+     !important нужен потому что в HTML на #rule-input-wrap висит
+     inline style="flex:1" — inline-стили побеждают по специфичности. */
   .rule-add-row > #rule-input-wrap {
-    flex: 1 1 100%;
+    flex: 1 1 100% !important;
+    width: 100%;
+  }
+  .rule-add-row > #rule-action-pills {
+    flex: 0 1 auto;
+  }
+  .rule-add-row > #btn-add-rule {
+    flex: 0 0 auto;
   }
 
   /* Большие тач-таргеты для inputs (минимум 16px чтобы iOS не зумил) */
