@@ -1648,3 +1648,83 @@ body {
 .btn-bridge-connect {
   flex-shrink: 0;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   MOBILE LAYOUT  (≤ 600px)
+   - Sidebar превращается в off-canvas drawer
+   - Бургер-кнопка видна только здесь
+   - Overlay гасит контент когда drawer открыт
+══════════════════════════════════════════════════════════════ */
+
+.burger {
+  display: none; /* скрыта на десктопе */
+}
+
+.sidebar-overlay {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .burger {
+    display: flex;
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 200;
+    width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+    background: var(--md-surface-high);
+    border: 1px solid var(--md-outline-var);
+    border-radius: 50%;
+    color: var(--md-on-surface);
+    cursor: pointer;
+    box-shadow: var(--elev-2);
+  }
+
+  .burger svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    z-index: 150;
+    transform: translateX(-100%);
+    transition: transform var(--tr);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 140;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--tr);
+  }
+
+  .sidebar-overlay.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .main-content {
+    padding: 60px 10px 10px; /* top 60px — место под бургер */
+    width: 100vw;
+  }
+
+  /* Плотнее карточки на узком экране */
+  .card {
+    padding: 10px 11px;
+  }
+}
