@@ -1613,6 +1613,14 @@ function renderShell(): void {
   }
 
   app.innerHTML = `
+    <button class="burger" id="burger" aria-label="Menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="4" y1="7"  x2="20" y2="7"/>
+        <line x1="4" y1="12" x2="20" y2="12"/>
+        <line x1="4" y1="17" x2="20" y2="17"/>
+      </svg>
+    </button>
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
     <nav class="sidebar" id="sidebar">
       <div class="sidebar-logo">
         <span class="logo-wordmark">whisp</span>
@@ -1623,6 +1631,20 @@ function renderShell(): void {
     </nav>
     <div class="main-content" id="main-content"></div>
   `;
+
+  const sidebar = document.getElementById("sidebar");
+  const overlay = document.getElementById("sidebar-overlay");
+  const burger = document.getElementById("burger");
+  const closeDrawer = () => {
+    sidebar?.classList.remove("open");
+    overlay?.classList.remove("open");
+  };
+  const openDrawer = () => {
+    sidebar?.classList.add("open");
+    overlay?.classList.add("open");
+  };
+  burger?.addEventListener("click", openDrawer);
+  overlay?.addEventListener("click", closeDrawer);
 
   renderNav();
   renderPage();
@@ -1661,7 +1683,13 @@ function renderNav(): void {
   `;
 
   document.querySelectorAll<HTMLElement>(".nav-item[data-page]").forEach(el => {
-    el.addEventListener("click", () => { currentPage = el.dataset.page as Page; renderNav(); renderPage(); });
+    el.addEventListener("click", () => {
+      currentPage = el.dataset.page as Page;
+      document.getElementById("sidebar")?.classList.remove("open");
+      document.getElementById("sidebar-overlay")?.classList.remove("open");
+      renderNav();
+      renderPage();
+    });
   });
   document.querySelectorAll<HTMLElement>(".lang-btn[data-lang]").forEach(el => {
     el.addEventListener("click", () => { lang = el.dataset.lang as Lang; saveLang(); renderNav(); renderPage(); });
