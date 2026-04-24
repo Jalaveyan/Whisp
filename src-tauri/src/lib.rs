@@ -243,6 +243,15 @@ fn patch_app_settings(app: tauri::AppHandle, patch: serde_json::Value) -> Result
 
 #[tauri::command]
 async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    // На Android sidecars (mihomo/go-client/ml-server) не поставляются — spawn упадёт
+    // с 'No such file' и путает пользователя. Выходим заранее с понятным сообщением.
+    #[cfg(target_os = "android")]
+    {
+        let _ = (app, state);
+        return Err("Подключение пока не поддерживается на Android (нет транспортных бинарей)".to_string());
+    }
+
+    #[allow(unreachable_code)]
     let mut settings = get_app_settings(app.clone())?;
 
     if settings.conn_key.is_empty() {
@@ -418,6 +427,13 @@ async fn connect_ml(
     token: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = (app, server, token, state);
+        return Err("ML-подключение пока не поддерживается на Android".to_string());
+    }
+
+    #[allow(unreachable_code)]
     let settings = get_app_settings(app.clone())?;
 
     if server.is_empty() && settings.conn_key.is_empty() {
@@ -1768,6 +1784,12 @@ async fn get_ml_status(state: tauri::State<'_, AppState>) -> Result<bool, String
 
 #[tauri::command]
 fn start_ml_server(state: tauri::State<AppState>) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = state;
+        return Err("ML-сервер недоступен на Android".to_string());
+    }
+    #[allow(unreachable_code)]
     let mut ml = state.ml_server.lock().map_err(|e| e.to_string())?;
     ml.start()?;
     Ok("ML server started".to_string())

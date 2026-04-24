@@ -1775,17 +1775,26 @@ body {
     width: 100vw;
   }
 
-  /* Page title — без хака под бургер, app-bar его прикроет */
+  /* Page title — без хака под бургер, app-bar его прикроет.
+     16px — чтобы не доминировать над card-title (10px uppercase) + кнопками. */
   .page-title {
     padding-left: 0;
-    font-size: 22px; /* было 28-32 — на узком экране 22 не переносится */
+    font-size: 16px;
     line-height: 1.2;
   }
   .page-header {
     flex-wrap: wrap;
     gap: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
   }
+
+  /* Все заголовки h1/h2/h3 в контенте — сжимаем чтобы не раздувало layout */
+  .main-content h1 { font-size: 18px; line-height: 1.2; }
+  .main-content h2 { font-size: 16px; line-height: 1.2; }
+  .main-content h3 { font-size: 14px; line-height: 1.2; }
+
+  /* Базовый размер тела — 13px как на десктопе */
+  body { font-size: 13px; }
 
   /* ── Cards — поджатые ────────────────────────────────── */
   .card {

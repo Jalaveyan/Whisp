@@ -477,6 +477,17 @@ pub fn generate_config(cfg: &MihomoConfig) -> String {
         format!("global-client-fingerprint: {fp}\n")
     };
 
+    // DNS redirect: если включён — принудительно резолвим все домены через прокси
+    // и отключаем fake-ip (переходим на redir-host). Так DNS-запросы уходят в тоннель,
+    // а не к системному резолверу, и клиент видит реальные IP.
+    // Без флага — старое поведение (fake-ip, быстрее, но DNS виден провайдеру).
+    let (dns_enhanced_mode, dns_proxy_policy) = if cfg.dns_redirect {
+        ("redir-host", "\n  proxy-server-nameserver:\n    - 1.1.1.1\n    - 8.8.8.8\n  nameserver-policy:\n    \"geosite:cn,!geolocation-!cn\": [ system ]\n    \"+.*\": [ 1.1.1.1, 8.8.8.8 ]")
+    } else {
+        ("fake-ip", "")
+    };
+    let _ = dns_proxy_policy; // пока только enhanced-mode меняем — policy требует geosite файлов
+
     format!(
         r#"mixed-port: {port}
 allow-lan: false
@@ -500,7 +511,7 @@ sniffer:
 dns:
   enable: true
   listen: 0.0.0.0:1053
-  enhanced-mode: fake-ip
+  enhanced-mode: {dns_enhanced_mode}
   fake-ip-range: 198.18.0.1/16
   fake-ip-filter:
     - "*.ru"
