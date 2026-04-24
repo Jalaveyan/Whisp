@@ -1613,13 +1613,15 @@ function renderShell(): void {
   }
 
   app.innerHTML = `
-    <button class="burger" id="burger" aria-label="Menu">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <line x1="4" y1="7"  x2="20" y2="7"/>
-        <line x1="4" y1="12" x2="20" y2="12"/>
-        <line x1="4" y1="17" x2="20" y2="17"/>
-      </svg>
-    </button>
+    <header class="app-bar" id="app-bar">
+      <button class="burger" id="burger" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="4" y1="7"  x2="20" y2="7"/>
+          <line x1="4" y1="12" x2="20" y2="12"/>
+          <line x1="4" y1="17" x2="20" y2="17"/>
+        </svg>
+      </button>
+    </header>
     <div class="sidebar-overlay" id="sidebar-overlay"></div>
     <nav class="sidebar" id="sidebar">
       <div class="sidebar-logo">
@@ -2594,8 +2596,8 @@ function renderConnections(): string {
             <code style="flex:1;font-size:11px;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(k)}</code>
             <button class="btn-sm btn-danger extra-key-remove" data-idx="${i}" style="font-size:11px;padding:1px 7px">✕</button>
           </div>`).join("")}
-        <div style="display:flex;gap:6px;margin-top:8px">
-          <input id="extra-key-new-input" class="input-sm" style="flex:1" placeholder="whispera://...">
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+          <input id="extra-key-new-input" class="input-sm" style="flex:1 1 100%;min-width:0" placeholder="whispera://...">
           <button class="btn-sm" id="btn-extra-key-add">${t("connAdd")}</button>
         </div>
       </div>
@@ -4654,7 +4656,7 @@ function renderMLSection(): string {
           <span class="info-value"><span class="${modeClass}" id="ml-mode-badge">${modeText}</span></span>
         </div>
         <div class="info-row" id="ml-no-binary-row" style="${!_mlBinaryExists && !_mlStatus ? "" : "display:none"}"><span style="color:#f87171;font-size:12px">${t("mlNoBinary")}</span></div>
-        <div style="display:flex;gap:8px;margin-top:12px">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
           <button class="btn-sm" id="btn-ml-start"   ${_mlStatus || !_mlBinaryExists ? "disabled" : ""}>${t("mlStart")}</button>
           <button class="btn-sm" id="btn-ml-stop"    ${!_mlStatus ? "disabled" : ""}>${t("mlStop")}</button>
           <button class="btn-sm" id="btn-ml-restart" ${!_mlBinaryExists ? "disabled" : ""}>${t("mlRestart")}</button>
@@ -4683,7 +4685,7 @@ function renderMLSection(): string {
 
       <div class="card" style="margin-bottom:12px">
         <div class="card-header"><span class="card-title">${t("mlFederated")}</span></div>
-        <div style="display:flex;gap:8px;margin-top:8px">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
           <button class="btn-sm" id="btn-ml-fed-export" ${!_mlStatus ? "disabled" : ""}>${t("mlFedExport")}</button>
           <button class="btn-sm" id="btn-ml-fed-import" ${!_mlStatus ? "disabled" : ""}>${t("mlFedImport")}</button>
           <button class="btn-sm" id="btn-ml-fed-losses" ${!_mlStatus ? "disabled" : ""}>${t("mlFedLosses")}</button>
