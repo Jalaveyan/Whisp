@@ -17,6 +17,7 @@ use ml_server::MlServerManager;
 
 include!(concat!(env!("OUT_DIR"), "/sidecar_hashes.rs"));
 
+#[cfg(not(target_os = "android"))]
 fn sidecar_sha256(path: &std::path::Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     let bytes = std::fs::read(path).ok()?;
@@ -25,6 +26,7 @@ fn sidecar_sha256(path: &std::path::Path) -> Option<String> {
     Some(format!("{:x}", h.finalize()))
 }
 
+#[cfg(not(target_os = "android"))]
 fn verify_sidecar(path: &std::path::Path) -> Result<(), String> {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     let expected = SIDECAR_HASHES.iter().find(|(n, _)| *n == name).map(|(_, h)| *h);
@@ -243,12 +245,15 @@ fn patch_app_settings(app: tauri::AppHandle, patch: serde_json::Value) -> Result
 
 #[tauri::command]
 async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<String, String> {
-    // На Android sidecars (mihomo/go-client/ml-server) не поставляются — spawn упадёт
-    // с 'No such file' и путает пользователя. Выходим заранее с понятным сообщением.
+    // На Android реальный TUN устанавливается через WhispVpnService (Kotlin).
+    // Сейчас этот командный путь стартует mihomo+go-client как обычно — Tauri
+    // sidecar API сам распакует .so из jniLibs. Дополнительно нужен intent на
+    // VpnService — это будет следующим коммитом (Tauri JNI bridge), пока что
+    // вернём осмысленный TODO вместо тихого падения.
     #[cfg(target_os = "android")]
     {
         let _ = (app, state);
-        return Err("Подключение пока не поддерживается на Android (нет транспортных бинарей)".to_string());
+        return Err("Android VPN: нужен intent на WhispVpnService (TODO следующего коммита)".to_string());
     }
 
     #[allow(unreachable_code)]
@@ -427,10 +432,12 @@ async fn connect_ml(
     token: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
+    // ML-подключение тоже использует mihomo+TUN — недоступно на Android до
+    // wiring VpnService. Чисто ML-сервер запускается через start_ml_server.
     #[cfg(target_os = "android")]
     {
         let _ = (app, server, token, state);
-        return Err("ML-подключение пока не поддерживается на Android".to_string());
+        return Err("ML-подключение требует системного VPN — пока недоступно на Android".to_string());
     }
 
     #[allow(unreachable_code)]
@@ -1643,7 +1650,9 @@ async fn ping_key(key: String) -> Result<u64, String> {
     Ok(start.elapsed().as_millis() as u64)
 }
 
+#[cfg(not(target_os = "android"))]
 const KEYRING_SERVICE: &str = "Whisp";
+#[cfg(not(target_os = "android"))]
 const KEYRING_USER: &str = "ml_api_token";
 
 #[cfg(not(target_os = "android"))]
@@ -1784,12 +1793,6 @@ async fn get_ml_status(state: tauri::State<'_, AppState>) -> Result<bool, String
 
 #[tauri::command]
 fn start_ml_server(state: tauri::State<AppState>) -> Result<String, String> {
-    #[cfg(target_os = "android")]
-    {
-        let _ = state;
-        return Err("ML-сервер недоступен на Android".to_string());
-    }
-    #[allow(unreachable_code)]
     let mut ml = state.ml_server.lock().map_err(|e| e.to_string())?;
     ml.start()?;
     Ok("ML server started".to_string())
@@ -2011,11 +2014,39 @@ pub fn run() {
     #[cfg(not(target_os = "windows"))]
     const EXE_EXT: &str = "";
 
+    // На Android Tauri пакетит sidecars в nativeLibraryDir как `lib<name>.so`.
+    // Без JNI прочитать nativeLibraryDir сложно — пробуем стандартные кандидаты
+    // (рядом с exe / стандартные пути под /data/data и /data/app).
+    #[cfg(target_os = "android")]
+    let resolve_android_sidecar = |name: &str| -> PathBuf {
+        let so_name = format!("lib{}.so", name);
+        let candidates = [
+            exe_dir.join(&so_name),
+            exe_dir.join(name),
+            PathBuf::from(format!("/data/data/com.whispera.whisp/lib/{}", so_name)),
+            PathBuf::from(format!("/data/app/com.whispera.whisp/lib/arm64/{}", so_name)),
+        ];
+        candidates
+            .iter()
+            .find(|p| p.exists())
+            .cloned()
+            .unwrap_or_else(|| candidates[0].clone())
+    };
+
+    #[cfg(not(target_os = "android"))]
     let mihomo_path = exe_dir.join(format!("mihomo{}", EXE_EXT));
+    // На Android mihomo тоже резолвим из nativeLibraryDir — будет получать
+    // TUN-fd через JNI от WhispVpnService.kt (см. crates/whisp-vpn-android).
+    #[cfg(target_os = "android")]
+    let mihomo_path = resolve_android_sidecar("mihomo");
+
+    #[cfg(not(target_os = "android"))]
     let go_client_path = exe_dir.join(format!("whispera-go-client{}", EXE_EXT));
+    #[cfg(target_os = "android")]
+    let go_client_path = resolve_android_sidecar("whispera-go-client");
 
     #[cfg(target_os = "android")]
-    let ml_server_path = PathBuf::new();
+    let ml_server_path = resolve_android_sidecar("whispera-ml-server");
     #[cfg(all(not(target_os = "android"), dev))]
     let ml_server_path = exe_dir.join(format!("whispera-ml-server{}", EXE_EXT));
     #[cfg(all(not(target_os = "android"), not(dev)))]

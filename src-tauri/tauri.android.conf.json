@@ -1,5 +1,9 @@
 {
   "bundle": {
-    "externalBin": []
+    "externalBin": [
+      "binaries/mihomo",
+      "binaries/whispera-go-client",
+      "binaries/whispera-ml-server"
+    ]
   }
 }
