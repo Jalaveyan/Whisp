@@ -11,10 +11,11 @@
 //! Kotlin: `Builder.addDisallowedApplication(packageName)` — наш UID не идёт
 //! через TUN.
 
-use command_fds::{CommandFdExt, FdMapping};
+use crate::rules::{RoutingAction, RoutingRule};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::io::RawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -44,6 +45,7 @@ pub fn spawn_mihomo(
     mihomo_path: &Path,
     tun_fd: RawFd,
     socks_upstream: Option<&str>,
+    rules: &[RoutingRule],
 ) -> Result<MihomoChild, String> {
     if !mihomo_path.exists() {
         return Err(format!("mihomo not found at {}", mihomo_path.display()));
@@ -53,7 +55,7 @@ pub fn spawn_mihomo(
     let work_dir = std::env::temp_dir().join(format!("whisp-mihomo-{}", std::process::id()));
     fs::create_dir_all(&work_dir).map_err(|e| format!("mkdir work_dir: {}", e))?;
 
-    let yaml = generate_config(tun_fd, socks_upstream);
+    let yaml = generate_config(tun_fd, socks_upstream, rules);
     let cfg_path = work_dir.join("config.yaml");
     fs::write(&cfg_path, &yaml).map_err(|e| format!("write config.yaml: {}", e))?;
 
@@ -63,18 +65,30 @@ pub fn spawn_mihomo(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // КРИТИЧНО: сохраняем TUN-fd в child под тем же номером.
-    cmd.fd_mappings(vec![FdMapping {
-        parent_fd: tun_fd,
-        child_fd: tun_fd,
-    }])
-    .map_err(|e| format!("fd_mappings: {}", e))?;
+    // КРИТИЧНО: сохраняем TUN-fd в child под тем же номером. По умолчанию
+    // std::process::Command ставит FD_CLOEXEC и fd закроется при exec.
+    // Снимаем флаг руками в pre_exec callback (выполняется в child после fork,
+    // до exec).
+    let preserve_fd = tun_fd;
+    unsafe {
+        cmd.pre_exec(move || {
+            let flags = libc::fcntl(preserve_fd, libc::F_GETFD);
+            if flags < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::fcntl(preserve_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
 
-    let child = cmd.spawn().map_err(|e| format!("spawn mihomo: {}", e))?;
+    let mut child = cmd.spawn().map_err(|e| format!("spawn mihomo: {}", e))?;
 
-    // Логи mihomo сольём в Android logcat best-effort (отдельный thread).
-    drain_to_log("mihomo-stdout", child.stdout.as_ref().map(|s| s.try_clone()).flatten());
-    drain_to_log("mihomo-stderr", child.stderr.as_ref().map(|s| s.try_clone()).flatten());
+    // Логи mihomo сольём в Android logcat best-effort. Берём stdout/stderr
+    // полностью (take), Child всё равно kill+wait через PID.
+    drain_to_log("mihomo-stdout", child.stdout.take());
+    drain_to_log("mihomo-stderr", child.stderr.take());
 
     Ok(MihomoChild { child, work_dir })
 }
@@ -95,7 +109,53 @@ fn drain_to_log<R: std::io::Read + Send + 'static>(_tag: &'static str, src: Opti
     });
 }
 
-fn generate_config(tun_fd: RawFd, socks_upstream: Option<&str>) -> String {
+fn action_yaml(a: RoutingAction, has_proxy: bool) -> &'static str {
+    match a {
+        RoutingAction::Reject => "REJECT",
+        RoutingAction::Direct => "DIRECT",
+        // PROXY можно использовать только если есть socks-upstream + group PROXY.
+        // Иначе гасим в DIRECT — иначе mihomo откажется парсить config.
+        RoutingAction::Proxy => if has_proxy { "PROXY" } else { "DIRECT" },
+    }
+}
+
+fn rules_to_yaml(rules: &[RoutingRule], has_proxy: bool) -> String {
+    let default = if has_proxy { "PROXY" } else { "DIRECT" };
+    let mut out = String::from("rules:\n");
+    let mut had_fallback = false;
+    for r in rules {
+        match r {
+            RoutingRule::DomainExact { domain, action } => {
+                out.push_str(&format!("  - DOMAIN,{},{}\n", domain, action_yaml(*action, has_proxy)));
+            }
+            RoutingRule::DomainSuffix { suffix, action } => {
+                out.push_str(&format!("  - DOMAIN-SUFFIX,{},{}\n", suffix, action_yaml(*action, has_proxy)));
+            }
+            RoutingRule::DomainKeyword { keyword, action } => {
+                out.push_str(&format!("  - DOMAIN-KEYWORD,{},{}\n", keyword, action_yaml(*action, has_proxy)));
+            }
+            RoutingRule::IpCidr { cidr, action } => {
+                out.push_str(&format!("  - IP-CIDR,{},{},no-resolve\n", cidr, action_yaml(*action, has_proxy)));
+            }
+            RoutingRule::ProcessName { name, action } => {
+                // На Android mihomo PROCESS-NAME матчит package name (через
+                // fd-сниффинг + reverse-lookup uid → pkg). Работает на API 28+.
+                out.push_str(&format!("  - PROCESS-NAME,{},{}\n", name, action_yaml(*action, has_proxy)));
+            }
+            RoutingRule::Fallback { action } => {
+                out.push_str(&format!("  - MATCH,{}\n", action_yaml(*action, has_proxy)));
+                had_fallback = true;
+            }
+        }
+    }
+    if !had_fallback {
+        out.push_str(&format!("  - MATCH,{}\n", default));
+    }
+    out
+}
+
+fn generate_config(tun_fd: RawFd, socks_upstream: Option<&str>, rules: &[RoutingRule]) -> String {
+    let has_proxy = socks_upstream.is_some();
     let upstream_block = match socks_upstream {
         Some(addr) => {
             let (host, port) = addr.split_once(':').unwrap_or(("127.0.0.1", "1080"));
@@ -113,22 +173,22 @@ proxy-groups:
     proxies:
       - upstream
 
-rules:
-  - MATCH,PROXY
-"#
+{rules_yaml}"#,
+                rules_yaml = rules_to_yaml(rules, true)
             )
         }
         None => {
-            // Smoke-режим: всё DIRECT. Mihomo просто пропустит трафик через TUN
-            // и вернёт назад в обычную сеть. Полезно проверить что pipe работает.
-            r#"proxies: []
+            // Без socks-upstream — все PROXY-правила автоматически downgrade в DIRECT
+            // (rules_to_yaml сам это делает). REJECT при этом всё равно работает —
+            // полезно даже без upstream чтобы блокировать рекламу/трекеры.
+            format!(
+                r#"proxies: []
 
 proxy-groups: []
 
-rules:
-  - MATCH,DIRECT
-"#
-            .to_string()
+{rules_yaml}"#,
+                rules_yaml = rules_to_yaml(rules, false)
+            )
         }
     };
 

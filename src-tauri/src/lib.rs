@@ -61,6 +61,53 @@ struct RoutingRule {
     action: String,
 }
 
+/// Собирает routing_rules + blocklist в JSON для whisp_vpn_android::nativeStart.
+/// Формат — RoutingRule enum из crate::rules с tag="kind", rename_all=kebab-case.
+#[cfg(target_os = "android")]
+fn build_android_rules_json(settings: &AppSettings) -> String {
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+    let push = |dst: &mut Vec<serde_json::Value>, r: &RoutingRule, force_action: Option<&str>| {
+        let action = force_action.unwrap_or(&r.action).to_uppercase();
+        let mapped = match action.as_str() {
+            "DIRECT" => "DIRECT",
+            "PROXY" => "PROXY",
+            "REJECT" | "BLOCK" => "REJECT",
+            _ => "DIRECT",
+        };
+        let kind = match r.kind.as_str() {
+            "domain-keyword" => "domain-keyword",
+            "domain-full" => "domain-exact",
+            "ip" => "ip-cidr",
+            "process" => "process-name",
+            _ => "domain-suffix", // включая 'domain'
+        };
+        let val_field = match kind {
+            "domain-suffix" => ("suffix", r.value.clone()),
+            "domain-keyword" => ("keyword", r.value.clone()),
+            "domain-exact" => ("domain", r.value.clone()),
+            "ip-cidr" => {
+                let v = if r.value.contains('/') { r.value.clone() } else { format!("{}/32", r.value) };
+                ("cidr", v)
+            }
+            "process-name" => ("name", r.value.clone()),
+            _ => ("suffix", r.value.clone()),
+        };
+        let mut obj = serde_json::Map::new();
+        obj.insert("kind".to_string(), serde_json::Value::String(kind.to_string()));
+        obj.insert(val_field.0.to_string(), serde_json::Value::String(val_field.1));
+        obj.insert("action".to_string(), serde_json::Value::String(mapped.to_string()));
+        dst.push(serde_json::Value::Object(obj));
+    };
+    for r in &settings.routing_rules {
+        push(&mut entries, r, None);
+    }
+    // blocklist всегда REJECT, action в самой записи может быть пустым — форсим
+    for r in &settings.blocklist {
+        push(&mut entries, r, Some("REJECT"));
+    }
+    serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AppSettings {
     conn_key: String,
@@ -246,13 +293,16 @@ fn patch_app_settings(app: tauri::AppHandle, patch: serde_json::Value) -> Result
 #[tauri::command]
 async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<String, String> {
     // На Android реальный TUN устанавливается через WhispVpnService (Kotlin).
-    // Шлём intent — сервис делает Builder.establish(), получает TUN fd и
-    // через JNI отдаёт его в whisp-vpn-android nativeStart, который дальше
-    // запустит mihomo и подключит к нему пакеты из TUN.
+    // Собираем правила пользователя в JSON, шлём intent с extra'ом — сервис
+    // делает Builder.establish(), получает TUN fd и через JNI отдаёт его +
+    // правила в whisp-vpn-android nativeStart. Mihomo стартует с этими
+    // правилами уже в config.yaml.
     #[cfg(target_os = "android")]
     {
-        let _ = (app, state);
-        whisp_vpn_android::service_intent::start_vpn_service()
+        let _ = state;
+        let settings = get_app_settings(app.clone())?;
+        let rules_json = build_android_rules_json(&settings);
+        whisp_vpn_android::service_intent::start_vpn_service(&rules_json)
             .map_err(|e| format!("startForegroundService(WhispVpnService) failed: {}", e))?;
         return Ok("Android VPN starting (WhispVpnService)".to_string());
     }
@@ -1965,6 +2015,25 @@ struct ProcessInfo {
 #[tauri::command]
 fn list_processes() -> Vec<ProcessInfo> {
     let mut result = Vec::new();
+
+    // На Android нет понятия 'process list' для других приложений (security),
+    // зато есть PackageManager — отдадим установленные пользовательские пакеты.
+    // Frontend на Android рендерит как пикер в кнопке 'Запущенные'.
+    #[cfg(target_os = "android")]
+    {
+        match whisp_vpn_android::pkg_list::list_user_packages() {
+            Ok(apps) => {
+                for (i, a) in apps.into_iter().enumerate() {
+                    result.push(ProcessInfo {
+                        name: format!("{} ({})", a.label, a.package),
+                        pid: i as u32,
+                    });
+                }
+            }
+            Err(e) => eprintln!("[whisp] pkg_list failed: {}", e),
+        }
+        return result;
+    }
 
     #[cfg(target_os = "windows")]
     {

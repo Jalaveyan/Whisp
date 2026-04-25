@@ -71,12 +71,14 @@ pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeLoadRules(
 }
 
 /// Запуск VPN с уже полученным TUN-fd от VpnService.Builder.
-/// Spawn'ит mihomo с inherited fd, возвращает handle.
+/// Spawn'ит mihomo с inherited fd + пользовательские правила из JSON.
 ///
 /// Параметры:
 /// - tun_fd: fd от ParcelFileDescriptor.getFd()
 /// - _service: WhispVpnService (зарезервирован для protect()-callback в будущем)
 /// - mihomo_path: полный путь к бинарю — обычно nativeLibraryDir/libmihomo.so
+/// - rules_json: JSON-массив RoutingRule (см. crate::rules), пусто = только
+///   fallback DIRECT
 #[no_mangle]
 pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeStart(
     mut env: JNIEnv,
@@ -84,6 +86,7 @@ pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeStart(
     tun_fd: jint,
     _service: JObject,
     mihomo_path: JString,
+    rules_json: JString,
 ) -> jlong {
     let path_str: String = match env.get_string(&mihomo_path) {
         Ok(s) => s.into(),
@@ -93,15 +96,30 @@ pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeStart(
         }
     };
     let mihomo_path = PathBuf::from(path_str);
+
+    let rules_str: String = env.get_string(&rules_json).map(Into::into).unwrap_or_default();
+    let mut session = VpnSession { _core: VpnCore::new(), mihomo: None };
+    if !rules_str.trim().is_empty() && rules_str.trim() != "[]" {
+        match session._core.load_rules_json(&rules_str) {
+            Ok(n) => eprintln!("[whisp-vpn-android] loaded {} rules", n),
+            Err(e) => eprintln!("[whisp-vpn-android] rules_json parse failed: {}", e),
+        }
+    }
+
     eprintln!(
-        "[whisp-vpn-android] nativeStart fd={} mihomo={}",
-        tun_fd,
-        mihomo_path.display()
+        "[whisp-vpn-android] nativeStart fd={} mihomo={} rules_count={}",
+        tun_fd, mihomo_path.display(), session._core.rules().rules().len()
     );
 
-    // socks_upstream=None — smoke режим, MATCH,DIRECT. Когда подвезём go-client
-    // как локальный socks5, передадим Some("127.0.0.1:1080").
-    let mihomo = match spawn_mihomo(&mihomo_path, tun_fd as std::os::unix::io::RawFd, None) {
+    // socks_upstream=None — smoke режим (DIRECT и REJECT работают, PROXY downgrade
+    // в DIRECT). Когда подвезём go-client как 127.0.0.1:1080, передадим Some.
+    let rules: Vec<crate::RoutingRule> = session._core.rules().rules().to_vec();
+    let mihomo = match spawn_mihomo(
+        &mihomo_path,
+        tun_fd as std::os::unix::io::RawFd,
+        None,
+        &rules,
+    ) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[whisp-vpn-android] spawn_mihomo failed: {}", e);
@@ -110,10 +128,8 @@ pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeStart(
     };
     eprintln!("[whisp-vpn-android] mihomo spawned pid={}", mihomo.child.id());
 
-    box_handle(VpnSession {
-        _core: VpnCore::new(),
-        mihomo: Some(mihomo),
-    })
+    session.mihomo = Some(mihomo);
+    box_handle(session)
 }
 
 #[no_mangle]

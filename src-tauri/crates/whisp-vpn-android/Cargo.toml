@@ -23,8 +23,8 @@ jni = "0.21"
 # дополнительной инициализации.
 ndk-context = "0.1"
 # Передача TUN-fd в spawned mihomo: std::process::Command по дефолту ставит
-# FD_CLOEXEC, нужно явно сохранить fd при exec.
-command-fds = "0.3"
+# FD_CLOEXEC, нужно явно снять флаг через fcntl в pre_exec callback.
+libc = "0.2"
 
 [features]
 default = []
