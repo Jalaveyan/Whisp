@@ -19,6 +19,11 @@ pub use rules::{RoutingAction, RoutingRule, RulesEngine};
 #[cfg(all(target_os = "android", feature = "jni-bindings"))]
 mod jni_glue;
 
+// Отправка intent на WhispVpnService — используется из Tauri-команды `connect`
+// в src-tauri/src/lib.rs под cfg(android), чтобы запустить VpnService.
+#[cfg(target_os = "android")]
+pub mod service_intent;
+
 /// Публичная точка входа для инициализации VPN-ядра.
 /// На Android вызывается из Kotlin через JNI после `VpnService.Builder.establish()`.
 /// На desktop — тесты / dev-smoke.

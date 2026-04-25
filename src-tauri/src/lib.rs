@@ -246,14 +246,15 @@ fn patch_app_settings(app: tauri::AppHandle, patch: serde_json::Value) -> Result
 #[tauri::command]
 async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<String, String> {
     // На Android реальный TUN устанавливается через WhispVpnService (Kotlin).
-    // Сейчас этот командный путь стартует mihomo+go-client как обычно — Tauri
-    // sidecar API сам распакует .so из jniLibs. Дополнительно нужен intent на
-    // VpnService — это будет следующим коммитом (Tauri JNI bridge), пока что
-    // вернём осмысленный TODO вместо тихого падения.
+    // Шлём intent — сервис делает Builder.establish(), получает TUN fd и
+    // через JNI отдаёт его в whisp-vpn-android nativeStart, который дальше
+    // запустит mihomo и подключит к нему пакеты из TUN.
     #[cfg(target_os = "android")]
     {
         let _ = (app, state);
-        return Err("Android VPN: нужен intent на WhispVpnService (TODO следующего коммита)".to_string());
+        whisp_vpn_android::service_intent::start_vpn_service()
+            .map_err(|e| format!("startForegroundService(WhispVpnService) failed: {}", e))?;
+        return Ok("Android VPN starting (WhispVpnService)".to_string());
     }
 
     #[allow(unreachable_code)]
@@ -554,16 +555,32 @@ async fn connect_ml(
 
 #[tauri::command]
 fn disconnect(state: tauri::State<AppState>) -> Result<String, String> {
-    state.watchdog_specs.lock().ok().map(|mut s| s.clear());
+    // На Android весь mihomo-stack живёт внутри WhispVpnService — стопим
+    // через intent. Sidecar-managers в state.mihomo / state.go_client на
+    // Android всё равно ничего не запускают (nativeLibraryDir-paths,
+    // на которые они ссылаются, потребляются Kotlin-сервисом, а не
+    // напрямую отсюда).
+    #[cfg(target_os = "android")]
+    {
+        let _ = state;
+        whisp_vpn_android::service_intent::stop_vpn_service()
+            .map_err(|e| format!("stopService(WhispVpnService) failed: {}", e))?;
+        return Ok("Android VPN stopping".to_string());
+    }
 
-    let mut mihomo = state.mihomo.lock().map_err(|e| e.to_string())?;
-    mihomo.stop()?;
+    #[allow(unreachable_code)]
+    {
+        state.watchdog_specs.lock().ok().map(|mut s| s.clear());
 
-    let mut gc = state.go_client.lock().map_err(|e| e.to_string())?;
-    gc.stop_extras();
-    gc.stop()?;
+        let mut mihomo = state.mihomo.lock().map_err(|e| e.to_string())?;
+        mihomo.stop()?;
 
-    Ok("Disconnected".to_string())
+        let mut gc = state.go_client.lock().map_err(|e| e.to_string())?;
+        gc.stop_extras();
+        gc.stop()?;
+
+        Ok("Disconnected".to_string())
+    }
 }
 
 #[tauri::command]

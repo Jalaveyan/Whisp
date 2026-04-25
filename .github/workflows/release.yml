@@ -211,14 +211,18 @@ jobs:
           out-file-path: src-tauri/binaries/
         continue-on-error: true
 
-      - name: Download mihomo (android-arm64)
+      - name: Download mihomo (android-arm64-v8)
         shell: bash
         run: |
           MIHOMO_VER="v1.19.8"
           mkdir -p src-tauri/binaries
-          curl -sL "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-android-arm64-${MIHOMO_VER}.gz" -o mihomo.gz
+          # Asset реально зовётся mihomo-android-arm64-v8-vX.Y.Z.gz, не arm64.
+          ASSET="mihomo-android-arm64-v8-${MIHOMO_VER}.gz"
+          URL="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/${ASSET}"
+          curl -fsSL "$URL" -o mihomo.gz
+          file mihomo.gz | grep -q gzip || (echo "Not a gzip — likely 404 HTML"; head -c 500 mihomo.gz; exit 1)
           gunzip -f mihomo.gz
-          # Tauri sidecar naming: <name>-<triple>
+          # Tauri sidecar naming convention: <name>-<rust-target-triple>
           mv mihomo src-tauri/binaries/mihomo-aarch64-linux-android
 
       - name: chmod +x sidecars
