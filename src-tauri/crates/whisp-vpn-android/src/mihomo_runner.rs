@@ -13,7 +13,7 @@
 
 use crate::rules::{RoutingAction, RoutingRule};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::unix::io::RawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -155,7 +155,6 @@ fn rules_to_yaml(rules: &[RoutingRule], has_proxy: bool) -> String {
 }
 
 fn generate_config(tun_fd: RawFd, socks_upstream: Option<&str>, rules: &[RoutingRule]) -> String {
-    let has_proxy = socks_upstream.is_some();
     let upstream_block = match socks_upstream {
         Some(addr) => {
             let (host, port) = addr.split_once(':').unwrap_or(("127.0.0.1", "1080"));
