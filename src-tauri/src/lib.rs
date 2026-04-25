@@ -2059,7 +2059,9 @@ fn list_processes() -> Vec<ProcessInfo> {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    // Linux/macOS: ps. На android этот блок не достигается (выше Android-ветка
+    // делает return), потому исключаем его явно — иначе warning unreachable_code.
+    #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
     {
         let out = std::process::Command::new("ps")
             .args(["-eo", "comm,pid", "--no-headers"])
@@ -2095,9 +2097,12 @@ pub fn run() {
     // ставятся без расширения. До этого фикса клиент на не-Windows не находил
     // ни mihomo, ни go-client, ни ml-server — verify_sidecar() падал и через
     // std::process::exit(1) убивал app.
-    #[cfg(target_os = "windows")]
+    // На desktop/iOS используется для построения путей к sidecar'ам
+    // (whispera-go-client / mihomo / whispera-ml-server). На Android всё
+    // резолвится через resolve_android_sidecar — EXE_EXT там не нужен.
+    #[cfg(all(target_os = "windows", not(target_os = "android")))]
     const EXE_EXT: &str = ".exe";
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
     const EXE_EXT: &str = "";
 
     // На Android Tauri пакетит sidecars в nativeLibraryDir как `lib<name>.so`.
