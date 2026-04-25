@@ -233,11 +233,11 @@ jobs:
 
       - name: Upscale icon source to 1024x1024 for Tauri icon generator
         run: |
-          # Tauri icon хочет 1024×1024+; у нас в репо max 256×256. Ресайзим
-          # через ImageMagick (предустановлен на ubuntu-latest), затем
-          # генерим все сайзы для всех платформ (Android mipmap, iOS, etc).
+          # Tauri icon хочет 1024×1024+; у нас в репо max 256×256. ImageMagick
+          # v6 'convert' на новых ubuntu-latest deprecated, использую PIL — он
+          # уже стоит в python3 на runner-е, без sudo apt.
           mkdir -p src-tauri/icons-tmp
-          convert src-tauri/icons/128x128@2x.png -resize 1024x1024 src-tauri/icons-tmp/source.png
+          python3 -c "from PIL import Image; Image.open('src-tauri/icons/128x128@2x.png').resize((1024,1024), Image.LANCZOS).save('src-tauri/icons-tmp/source.png')"
           npx tauri icon src-tauri/icons-tmp/source.png
 
       - name: Initialize Tauri Android project
