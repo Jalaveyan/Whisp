@@ -22,6 +22,9 @@ jni = "0.21"
 # поэтому android_context() возвращает рабочую пару (VM, Context) без нашей
 # дополнительной инициализации.
 ndk-context = "0.1"
+# Передача TUN-fd в spawned mihomo: std::process::Command по дефолту ставит
+# FD_CLOEXEC, нужно явно сохранить fd при exec.
+command-fds = "0.3"
 
 [features]
 default = []

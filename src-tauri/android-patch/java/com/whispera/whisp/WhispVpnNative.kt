@@ -22,7 +22,9 @@ object WhispVpnNative {
 
     @JvmStatic external fun nativeInit(): Long
     @JvmStatic external fun nativeLoadRules(handle: Long, rulesJson: String): Int
-    @JvmStatic external fun nativeStart(tunFd: Int, service: WhispVpnService): Long
+    /** Запуск VPN: получает TUN fd, ссылку на сервис (для будущего protect() callback)
+     *  и полный путь к бинарю mihomo в nativeLibraryDir. Возвращает handle или 0 при ошибке. */
+    @JvmStatic external fun nativeStart(tunFd: Int, service: WhispVpnService, mihomoPath: String): Long
     @JvmStatic external fun nativeStop(handle: Long): Int
     @JvmStatic external fun nativeFree(handle: Long)
 }
