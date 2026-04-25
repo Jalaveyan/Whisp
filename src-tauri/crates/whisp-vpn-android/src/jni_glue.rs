@@ -14,7 +14,7 @@
 //!
 //! Больше методов добавим когда начнём реально тянуть пакеты через TUN-fd.
 
-use jni::objects::{JClass, JString};
+use jni::objects::{JClass, JObject, JString};
 use jni::sys::{jint, jlong};
 use jni::JNIEnv;
 
@@ -71,4 +71,38 @@ pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeFree(
     unsafe {
         drop(Box::from_raw(handle as *mut VpnCore));
     }
+}
+
+/// Запуск VPN-петли с уже полученным TUN-fd от VpnService.Builder.
+/// Service-объект хранится для последующих вызовов protect().
+///
+/// Сейчас это no-op-шим: возвращаем фиктивный handle. Реальная имплементация
+/// будет: spawn'ить thread, читать пакеты из TUN-fd, парсить IP header,
+/// отдавать в RulesEngine, заворачивать выбранным transport. Подключение к
+/// mihomo делается отдельным процессом (sidecar), пакеты в него отдаются
+/// через TCP/UDP socket в loopback.
+#[no_mangle]
+pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeStart(
+    _env: JNIEnv,
+    _class: JClass,
+    tun_fd: jint,
+    _service: JObject,
+) -> jlong {
+    eprintln!("[whisp-vpn-android] nativeStart fd={} (skeleton)", tun_fd);
+    let core = VpnCore::new();
+    Box::into_raw(Box::new(core)) as jlong
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeStop(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    if handle == 0 {
+        return 0;
+    }
+    unsafe { drop(Box::from_raw(handle as *mut VpnCore)) };
+    eprintln!("[whisp-vpn-android] nativeStop");
+    1
 }

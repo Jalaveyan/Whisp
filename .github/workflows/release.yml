@@ -202,6 +202,28 @@ jobs:
           out-file-path: src-tauri/binaries/
         continue-on-error: true
 
+      - name: Download whispera-ml-server (arm64)
+        uses: robinraju/release-downloader@v1.10
+        with:
+          repository: Jalaveyan/Whispera
+          latest: true
+          fileName: 'whispera-ml-server-aarch64-linux-android'
+          out-file-path: src-tauri/binaries/
+        continue-on-error: true
+
+      - name: Download mihomo (android-arm64)
+        shell: bash
+        run: |
+          MIHOMO_VER="v1.19.8"
+          mkdir -p src-tauri/binaries
+          curl -sL "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-android-arm64-${MIHOMO_VER}.gz" -o mihomo.gz
+          gunzip -f mihomo.gz
+          # Tauri sidecar naming: <name>-<triple>
+          mv mihomo src-tauri/binaries/mihomo-aarch64-linux-android
+
+      - name: chmod +x sidecars
+        run: chmod +x src-tauri/binaries/* || true
+
       - name: Install frontend deps
         run: npm ci
 
@@ -211,6 +233,9 @@ jobs:
           npx tauri android init
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply VpnService patch (Kotlin + manifest)
+        run: bash src-tauri/android-patch/apply.sh
 
       - name: Build Tauri Android APK (debug, auto-signed)
         run: |
