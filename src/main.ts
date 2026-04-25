@@ -1648,6 +1648,41 @@ function renderShell(): void {
   burger?.addEventListener("click", openDrawer);
   overlay?.addEventListener("click", closeDrawer);
 
+  // Swipe-from-edge: тач, начинающийся в первых 24px слева, открывает drawer.
+  // Тач на drawer'е, который двигается влево больше 60px, — закрывает.
+  // Чисто JS, без css transitions during drag — простой пороговый трекер.
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchMode: "open" | "close" | null = null;
+  document.addEventListener("touchstart", (e) => {
+    const t = e.touches[0];
+    if (!t) return;
+    const drawerOpen = sidebar?.classList.contains("open") ?? false;
+    if (!drawerOpen && t.clientX < 24) {
+      touchStartX = t.clientX;
+      touchStartY = t.clientY;
+      touchMode = "open";
+    } else if (drawerOpen && t.clientX < 280) {
+      touchStartX = t.clientX;
+      touchStartY = t.clientY;
+      touchMode = "close";
+    } else {
+      touchMode = null;
+    }
+  }, { passive: true });
+  document.addEventListener("touchend", (e) => {
+    if (!touchMode) return;
+    const t = e.changedTouches[0];
+    if (!t) { touchMode = null; return; }
+    const dx = t.clientX - touchStartX;
+    const dy = Math.abs(t.clientY - touchStartY);
+    // Анти-фолс-позитив: вертикальное движение должно быть < 50% горизонтального.
+    if (dy > Math.abs(dx) * 0.5) { touchMode = null; return; }
+    if (touchMode === "open" && dx > 60) openDrawer();
+    if (touchMode === "close" && dx < -60) closeDrawer();
+    touchMode = null;
+  });
+
   renderNav();
   renderPage();
 }
