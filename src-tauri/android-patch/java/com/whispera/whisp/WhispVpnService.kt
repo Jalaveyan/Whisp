@@ -79,11 +79,19 @@ class WhispVpnService : VpnService() {
         }
         tunInterface = pfd
 
-        // 3. Отдаём TUN fd в Rust. Native слой знает как запустить mihomo
-        // и подцепить сокеты к protect()-callback (через WhispVpnNative.protectSocket).
+        // 3. Отдаём TUN fd + путь к mihomo в Rust. Tauri пакетит sidecars в
+        // nativeLibraryDir как `lib<name>.so` (Android требует .so в lib dir
+        // чтобы можно было exec). Rust spawn'ит mihomo с inherited fd.
+        val mihomoPath = "${applicationInfo.nativeLibraryDir}/libmihomo.so"
+        Log.i(TAG, "mihomoPath=$mihomoPath")
         try {
-            nativeHandle = WhispVpnNative.nativeStart(pfd.fd, this)
-            Log.i(TAG, "Rust core started, handle=$nativeHandle")
+            nativeHandle = WhispVpnNative.nativeStart(pfd.fd, this, mihomoPath)
+            if (nativeHandle == 0L) {
+                Log.e(TAG, "nativeStart returned 0 — mihomo не запустился (см. logcat выше)")
+                stopVpn()
+            } else {
+                Log.i(TAG, "Rust core started, handle=$nativeHandle")
+            }
         } catch (t: Throwable) {
             Log.e(TAG, "nativeStart failed", t)
             stopVpn()

@@ -24,6 +24,10 @@ mod jni_glue;
 #[cfg(target_os = "android")]
 pub mod service_intent;
 
+// Запуск mihomo с inherited TUN-fd — реальная маршрутизация пакетов на Android.
+#[cfg(target_os = "android")]
+pub mod mihomo_runner;
+
 /// Публичная точка входа для инициализации VPN-ядра.
 /// На Android вызывается из Kotlin через JNI после `VpnService.Builder.establish()`.
 /// На desktop — тесты / dev-smoke.
