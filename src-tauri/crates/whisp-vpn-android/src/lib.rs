@@ -28,6 +28,10 @@ pub mod service_intent;
 #[cfg(target_os = "android")]
 pub mod mihomo_runner;
 
+// PackageManager listing для UI пикера приложений в правилах маршрутизации.
+#[cfg(target_os = "android")]
+pub mod pkg_list;
+
 /// Публичная точка входа для инициализации VPN-ядра.
 /// На Android вызывается из Kotlin через JNI после `VpnService.Builder.establish()`.
 /// На desktop — тесты / dev-smoke.

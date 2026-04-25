@@ -15,6 +15,7 @@ use jni::JavaVM;
 const SERVICE_CLASS: &str = "com/whispera/whisp/WhispVpnService";
 const ACTION_START: &str = "com.whispera.whisp.ACTION_VPN_START";
 const ACTION_STOP: &str = "com.whispera.whisp.ACTION_VPN_STOP";
+const EXTRA_RULES_JSON: &str = "com.whispera.whisp.EXTRA_RULES_JSON";
 
 fn vm_and_ctx() -> Result<(JavaVM, *mut std::ffi::c_void), String> {
     // SAFETY: ndk_context::android_context() возвращает указатели,
@@ -30,7 +31,7 @@ fn vm_and_ctx() -> Result<(JavaVM, *mut std::ffi::c_void), String> {
     Ok((vm, ctx.context()))
 }
 
-fn send_action(action: &str, foreground: bool) -> Result<(), String> {
+fn send_action(action: &str, rules_json: Option<&str>) -> Result<(), String> {
     let (vm, ctx_ptr) = vm_and_ctx()?;
     let mut env = vm
         .attach_current_thread()
@@ -67,32 +68,43 @@ fn send_action(action: &str, foreground: bool) -> Result<(), String> {
     )
     .map_err(|e| format!("setAction: {}", e))?;
 
-    // context.startForegroundService(intent) — для VPN всегда foreground (Android 8+).
-    // Для STOP интент тоже шлём через startForegroundService (чтобы сервис обработал
-    // ACTION_STOP в onStartCommand и вызвал stopSelf), это безопаснее чем stopService.
-    let method = if foreground {
-        "startForegroundService"
-    } else {
-        "startService"
-    };
+    // intent.putExtra(EXTRA_RULES_JSON, rules_json)
+    if let Some(rules) = rules_json {
+        let key = env
+            .new_string(EXTRA_RULES_JSON)
+            .map_err(|e| format!("new_string key: {}", e))?;
+        let val = env
+            .new_string(rules)
+            .map_err(|e| format!("new_string rules: {}", e))?;
+        env.call_method(
+            &intent,
+            "putExtra",
+            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[JValue::Object(&key.into()), JValue::Object(&val.into())],
+        )
+        .map_err(|e| format!("putExtra: {}", e))?;
+    }
+
+    // VPN всегда foreground (Android 8+ убьёт обычный сервис в фоне).
     env.call_method(
         &context,
-        method,
+        "startForegroundService",
         "(Landroid/content/Intent;)Landroid/content/ComponentName;",
         &[JValue::Object(&intent)],
     )
-    .map_err(|e| format!("{}: {}", method, e))?;
+    .map_err(|e| format!("startForegroundService: {}", e))?;
 
     Ok(())
 }
 
-/// Запустить WhispVpnService. Сервис сам вызовет VpnService.Builder.establish()
-/// и затем дёрнет nativeStart с полученным TUN-fd.
-pub fn start_vpn_service() -> Result<(), String> {
-    send_action(ACTION_START, true)
+/// Запустить WhispVpnService с пользовательскими правилами (RoutingRule[] как JSON).
+/// Сервис сам вызовет VpnService.Builder.establish() и затем дёрнет nativeStart
+/// с TUN-fd + этим JSON.
+pub fn start_vpn_service(rules_json: &str) -> Result<(), String> {
+    send_action(ACTION_START, Some(rules_json))
 }
 
 /// Остановить активный WhispVpnService.
 pub fn stop_vpn_service() -> Result<(), String> {
-    send_action(ACTION_STOP, true)
+    send_action(ACTION_STOP, None)
 }

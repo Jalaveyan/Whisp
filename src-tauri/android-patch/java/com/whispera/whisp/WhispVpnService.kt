@@ -32,17 +32,22 @@ class WhispVpnService : VpnService() {
         const val TAG = "WhispVpnService"
         const val ACTION_START = "com.whispera.whisp.ACTION_VPN_START"
         const val ACTION_STOP = "com.whispera.whisp.ACTION_VPN_STOP"
+        const val EXTRA_RULES_JSON = "com.whispera.whisp.EXTRA_RULES_JSON"
         const val NOTIFICATION_ID = 17
         const val CHANNEL_ID = "whisp_vpn_channel"
     }
 
     private var tunInterface: ParcelFileDescriptor? = null
     private var nativeHandle: Long = 0L
+    private var pendingRulesJson: String = "[]"
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> { stopVpn(); return START_NOT_STICKY }
-            else -> startVpn()
+            else -> {
+                pendingRulesJson = intent?.getStringExtra(EXTRA_RULES_JSON) ?: "[]"
+                startVpn()
+            }
         }
         return START_STICKY
     }
@@ -85,7 +90,7 @@ class WhispVpnService : VpnService() {
         val mihomoPath = "${applicationInfo.nativeLibraryDir}/libmihomo.so"
         Log.i(TAG, "mihomoPath=$mihomoPath")
         try {
-            nativeHandle = WhispVpnNative.nativeStart(pfd.fd, this, mihomoPath)
+            nativeHandle = WhispVpnNative.nativeStart(pfd.fd, this, mihomoPath, pendingRulesJson)
             if (nativeHandle == 0L) {
                 Log.e(TAG, "nativeStart returned 0 — mihomo не запустился (см. logcat выше)")
                 stopVpn()
