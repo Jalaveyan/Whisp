@@ -18,6 +18,10 @@ jni = { version = "0.21", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+# Tauri 2 на Android уже инициализирует ndk_context через свой JNI_OnLoad,
+# поэтому android_context() возвращает рабочую пару (VM, Context) без нашей
+# дополнительной инициализации.
+ndk-context = "0.1"
 
 [features]
 default = []

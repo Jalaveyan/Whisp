@@ -4722,6 +4722,7 @@ name = "whisp-vpn-android"
 version = "0.1.0"
 dependencies = [
  "jni",
+ "ndk-context",
  "serde",
  "serde_json",
 ]
