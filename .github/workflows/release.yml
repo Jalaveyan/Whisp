@@ -231,6 +231,15 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Upscale icon source to 1024x1024 for Tauri icon generator
+        run: |
+          # Tauri icon хочет 1024×1024+; у нас в репо max 256×256. Ресайзим
+          # через ImageMagick (предустановлен на ubuntu-latest), затем
+          # генерим все сайзы для всех платформ (Android mipmap, iOS, etc).
+          mkdir -p src-tauri/icons-tmp
+          convert src-tauri/icons/128x128@2x.png -resize 1024x1024 src-tauri/icons-tmp/source.png
+          npx tauri icon src-tauri/icons-tmp/source.png
+
       - name: Initialize Tauri Android project
         run: |
           export NDK_HOME="$ANDROID_NDK_HOME"
