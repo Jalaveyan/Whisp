@@ -4,28 +4,29 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
-import androidx.core.app.NotificationCompat
 
 /**
  * VpnService для Whisp на Android.
  *
  * Жизненный цикл:
- *  1. Пользователь жмёт Connect → Rust команда `connect` дёргает
- *     `WhispVpnNative.startVpn(applicationContext)` (через JNI).
- *  2. Native слой запускает intent на этот сервис, передаёт сюда
- *     mihomo-config (yaml) и пути sidecars.
- *  3. Сервис строит TUN через VpnService.Builder, получает fd,
- *     пробрасывает fd обратно в Rust через `WhispVpnNative.attachTunFd(fd)`.
- *  4. Rust запускает mihomo с `tun.device: fd://N` либо с gVisor stack.
- *  5. Каждый исходящий socket из mihomo — protect()'ится этим сервисом
- *     (через JNI callback `protectSocket(fd)`), иначе зацикливается.
+ *  1. Пользователь жмёт Connect → Rust команда `connect` через JNI шлёт
+ *     intent на этот сервис (с RoutingRule[] JSON в extra).
+ *  2. onStartCommand → startVpn(): VpnService.Builder.establish() → fd.
+ *  3. WhispVpnNative.nativeStart(fd, this, mihomoPath, rulesJson) →
+ *     Rust spawn'ит mihomo с inherited fd.
+ *  4. Каждый исходящий socket из mihomo НЕ зацикливается через TUN
+ *     потому что builder.addDisallowedApplication(packageName) — наш UID
+ *     всегда роутится в обычную сеть (Android 5+ feature, проще protect()).
  *
  * Foreground notification обязательна для Android 8+ (иначе сервис убьют).
+ * Используем system Notification.Builder, а не androidx NotificationCompat —
+ * последний требует доп. depend, которой в Tauri Android jniLibs нет.
  */
 class WhispVpnService : VpnService() {
     companion object {
@@ -59,13 +60,12 @@ class WhispVpnService : VpnService() {
         startForeground(NOTIFICATION_ID, buildNotification())
 
         // 2. VpnService.Builder — конфигурируем TUN-интерфейс.
-        // Routes/DNS будем уточнять/обновлять из Rust по rules engine.
         val builder = Builder()
             .setSession("Whisp VPN")
             .setMtu(1500)
             .addAddress("10.55.55.2", 24)
-            .addRoute("0.0.0.0", 0)        // весь IPv4 трафик через TUN
-            .addRoute("::", 0)             // и IPv6
+            .addRoute("0.0.0.0", 0)
+            .addRoute("::", 0)
             .addDnsServer("1.1.1.1")
             .addDnsServer("8.8.8.8")
 
@@ -84,15 +84,13 @@ class WhispVpnService : VpnService() {
         }
         tunInterface = pfd
 
-        // 3. Отдаём TUN fd + путь к mihomo в Rust. Tauri пакетит sidecars в
-        // nativeLibraryDir как `lib<name>.so` (Android требует .so в lib dir
-        // чтобы можно было exec). Rust spawn'ит mihomo с inherited fd.
+        // 3. Отдаём TUN fd + путь к mihomo + правила в Rust.
         val mihomoPath = "${applicationInfo.nativeLibraryDir}/libmihomo.so"
-        Log.i(TAG, "mihomoPath=$mihomoPath")
+        Log.i(TAG, "mihomoPath=$mihomoPath rules=${pendingRulesJson.length}b")
         try {
             nativeHandle = WhispVpnNative.nativeStart(pfd.fd, this, mihomoPath, pendingRulesJson)
             if (nativeHandle == 0L) {
-                Log.e(TAG, "nativeStart returned 0 — mihomo не запустился (см. logcat выше)")
+                Log.e(TAG, "nativeStart returned 0 — mihomo не запустился")
                 stopVpn()
             } else {
                 Log.i(TAG, "Rust core started, handle=$nativeHandle")
@@ -111,7 +109,10 @@ class WhispVpnService : VpnService() {
         }
         tunInterface?.close()
         tunInterface = null
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        // stopForeground(true) — deprecated после API 33 в пользу
+        // STOP_FOREGROUND_REMOVE, но true всё ещё работает на всех уровнях.
+        @Suppress("DEPRECATION")
+        stopForeground(true)
         stopSelf()
     }
 
@@ -121,8 +122,8 @@ class WhispVpnService : VpnService() {
     }
 
     private fun buildNotification(): Notification {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             val ch = NotificationChannel(
                 CHANNEL_ID,
                 "Whisp VPN",
@@ -132,14 +133,24 @@ class WhispVpnService : VpnService() {
             nm.createNotificationChannel(ch)
         }
 
-        // Тап по нотификации — открыть основное окно приложения (MainActivity Tauri'а).
-        val pi = PendingIntent.getActivity(
-            this, 0,
-            packageManager.getLaunchIntentForPackage(packageName),
+        // Тап по нотификации — открыть основное окно приложения.
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val pi = PendingIntent.getActivity(this, 0, launchIntent, piFlags)
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        // System Notification.Builder вместо NotificationCompat.Builder —
+        // не требует androidx, всегда доступен на Android API 11+.
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+        return builder
             .setContentTitle("Whisp VPN")
             .setContentText("Подключено")
             .setSmallIcon(android.R.drawable.stat_sys_vpn_ic)
@@ -149,9 +160,11 @@ class WhispVpnService : VpnService() {
     }
 
     /**
-     * Вызывается из JNI (WhispVpnNative.protectSocket(fd)) для каждого
-     * исходящего соединения mihomo. Без этого пакеты от mihomo пойдут
-     * обратно в TUN и образуют петлю.
+     * Вызывается из JNI (WhispVpnNative.protectSocket) для каждого
+     * исходящего соединения mihomo. Сейчас не используется — мы полагаемся
+     * на addDisallowedApplication(packageName), но оставляем как hook
+     * на будущее (если перейдём на UID-based exclusion).
      */
+    @Suppress("unused")
     fun protectFd(fd: Int): Boolean = protect(fd)
 }
