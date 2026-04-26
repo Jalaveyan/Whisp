@@ -50,7 +50,6 @@ jobs:
             mihomo_asset: mihomo-darwin-amd64
             mihomo_archive: gz
             bundle_glob: |
-              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
               src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
           - label: macos-aarch64
             runner: macos-14
@@ -59,7 +58,6 @@ jobs:
             mihomo_asset: mihomo-darwin-arm64
             mihomo_archive: gz
             bundle_glob: |
-              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
               src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
     steps:
       - uses: actions/checkout@v4
@@ -150,7 +148,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: --target ${{ matrix.triple }}
+          # macOS: только app + tar.gz (DMG bundle_dmg.sh флачит на CI hdiutil).
+          args: ${{ contains(matrix.triple, 'apple-darwin') && '--target ' || '--target ' }}${{ matrix.triple }}${{ contains(matrix.triple, 'apple-darwin') && ' --bundles app' || '' }}
           includeDebug: false
           includeRelease: true
 
@@ -252,22 +251,35 @@ jobs:
         run: bash src-tauri/android-patch/apply.sh
 
       - name: Build Tauri Android APK (debug, auto-signed)
+        id: tauri_build
+        continue-on-error: true
         run: |
           export NDK_HOME="$ANDROID_NDK_HOME"
-          set -o pipefail
-          npx tauri android build --apk --debug --target aarch64 --verbose 2>&1 | tee /tmp/tauri-build.log
+          npx tauri android build --apk --debug --target aarch64 --verbose > tauri-build.log 2>&1
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Show Kotlin compile errors on failure
-        if: failure()
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-android-build-log
+          path: tauri-build.log
+          if-no-files-found: warn
+
+      - name: Show Kotlin errors
+        if: always()
         run: |
-          echo "=== grep for kotlin compile errors ==="
-          grep -nE '^e: |^w: |error: |\.kt:[0-9]+:[0-9]+' /tmp/tauri-build.log | head -80 || true
-          echo "=== last 150 lines of build log ==="
-          tail -150 /tmp/tauri-build.log || true
-          echo "=== generated Kotlin files (filenames only) ==="
-          find src-tauri/gen/android/app/src/main/java -name '*.kt' || true
+          if [ ! -f tauri-build.log ]; then echo "no build log"; exit 0; fi
+          echo "##### grep .kt errors #####"
+          grep -nE '\.kt:[0-9]+|^e: |error:' tauri-build.log | head -120 || true
+          echo "##### tail 200 #####"
+          tail -200 tauri-build.log
+
+      - name: Fail if build failed
+        if: steps.tauri_build.outputs.exit_code != '0'
+        run: exit 1
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
