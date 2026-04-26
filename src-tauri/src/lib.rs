@@ -302,9 +302,19 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
         let _ = state;
         let settings = get_app_settings(app.clone())?;
         let rules_json = build_android_rules_json(&settings);
-        whisp_vpn_android::service_intent::start_vpn_service(&rules_json)
-            .map_err(|e| format!("startForegroundService(WhispVpnService) failed: {}", e))?;
-        return Ok("Android VPN starting (WhispVpnService)".to_string());
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            whisp_vpn_android::service_intent::start_vpn_service(&rules_json)
+        }));
+        match res {
+            Ok(Ok(())) => return Ok("Android VPN starting".to_string()),
+            Ok(Err(e)) => return Err(format!("start_vpn_service: {}", e)),
+            Err(p) => {
+                let msg = if let Some(s) = p.downcast_ref::<&str>() { *s }
+                          else if let Some(s) = p.downcast_ref::<String>() { s.as_str() }
+                          else { "unknown panic" };
+                return Err(format!("panic in start_vpn_service: {}", msg));
+            }
+        }
     }
 
     #[allow(unreachable_code)]
@@ -613,9 +623,14 @@ fn disconnect(state: tauri::State<AppState>) -> Result<String, String> {
     #[cfg(target_os = "android")]
     {
         let _ = state;
-        whisp_vpn_android::service_intent::stop_vpn_service()
-            .map_err(|e| format!("stopService(WhispVpnService) failed: {}", e))?;
-        return Ok("Android VPN stopping".to_string());
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            whisp_vpn_android::service_intent::stop_vpn_service,
+        ));
+        match res {
+            Ok(Ok(())) => return Ok("Android VPN stopping".to_string()),
+            Ok(Err(e)) => return Err(format!("stop_vpn_service: {}", e)),
+            Err(_) => return Err("panic in stop_vpn_service".to_string()),
+        }
     }
 
     #[allow(unreachable_code)]

@@ -39,12 +39,26 @@ fn send_action(action: &str, rules_json: Option<&str>) -> Result<(), String> {
 
     let context = unsafe { JObject::from_raw(ctx_ptr as jni::sys::jobject) };
 
-    // Class<WhispVpnService>
+    // ClassLoader app_loader = context.getClassLoader()
+    // Без этого find_class из non-Java thread'а не находит наши Kotlin-классы:
+    // JVM использует system loader, а наши классы только в app's DEX.
+    let app_loader = env
+        .call_method(&context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .and_then(|v| v.l())
+        .map_err(|e| format!("getClassLoader: {}", e))?;
+    let svc_name = env
+        .new_string(SERVICE_CLASS.replace('/', "."))
+        .map_err(|e| format!("new_string svc: {}", e))?;
     let svc_class = env
-        .find_class(SERVICE_CLASS)
-        .map_err(|e| format!("find_class {}: {}", SERVICE_CLASS, e))?;
+        .call_method(
+            &app_loader,
+            "loadClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[JValue::Object(&svc_name.into())],
+        )
+        .and_then(|v| v.l())
+        .map_err(|e| format!("loadClass {}: {}", SERVICE_CLASS, e))?;
 
-    // Intent intent = new Intent(context, WhispVpnService.class)
     let intent_class = env
         .find_class("android/content/Intent")
         .map_err(|e| format!("find_class Intent: {}", e))?;
@@ -52,7 +66,7 @@ fn send_action(action: &str, rules_json: Option<&str>) -> Result<(), String> {
         .new_object(
             &intent_class,
             "(Landroid/content/Context;Ljava/lang/Class;)V",
-            &[JValue::Object(&context), JValue::Object(&svc_class.into())],
+            &[JValue::Object(&context), JValue::Object(&svc_class)],
         )
         .map_err(|e| format!("new Intent: {}", e))?;
 
