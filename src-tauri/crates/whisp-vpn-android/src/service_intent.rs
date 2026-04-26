@@ -111,14 +111,71 @@ fn send_action(action: &str, rules_json: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// Запустить WhispVpnService с пользовательскими правилами (RoutingRule[] как JSON).
-/// Сервис сам вызовет VpnService.Builder.establish() и затем дёрнет nativeStart
-/// с TUN-fd + этим JSON.
 pub fn start_vpn_service(rules_json: &str) -> Result<(), String> {
     send_action(ACTION_START, Some(rules_json))
 }
 
-/// Остановить активный WhispVpnService.
 pub fn stop_vpn_service() -> Result<(), String> {
     send_action(ACTION_STOP, None)
+}
+
+const PREP_CLASS: &str = "com/whispera/whisp/WhispVpnPrep";
+
+/// Возвращает true если VPN permission уже выдан, false — нужно вызвать request_vpn_permission.
+pub fn is_vpn_prepared() -> Result<bool, String> {
+    let (vm, ctx_ptr) = vm_and_ctx()?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let context = unsafe { JObject::from_raw(ctx_ptr as jni::sys::jobject) };
+    let app_loader = env
+        .call_method(&context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .and_then(|v| v.l())
+        .map_err(|e| format!("getClassLoader: {}", e))?;
+    let cls_name = env
+        .new_string(PREP_CLASS.replace('/', "."))
+        .map_err(|e| e.to_string())?;
+    let cls = env
+        .call_method(
+            &app_loader,
+            "loadClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[JValue::Object(&cls_name.into())],
+        )
+        .and_then(|v| v.l())
+        .map_err(|e| format!("loadClass {}: {}", PREP_CLASS, e))?;
+    let cls_class: jni::objects::JClass = cls.into();
+    let result = env
+        .call_static_method(&cls_class, "isPrepared", "()Z", &[])
+        .and_then(|v| v.z())
+        .map_err(|e| format!("isPrepared: {}", e))?;
+    Ok(result)
+}
+
+/// Открывает системный диалог 'Allow VPN'. Возвращает Ok(true) если диалог
+/// показан/уже approved, Err при отсутствии MainActivity.
+pub fn request_vpn_permission() -> Result<i32, String> {
+    let (vm, ctx_ptr) = vm_and_ctx()?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let context = unsafe { JObject::from_raw(ctx_ptr as jni::sys::jobject) };
+    let app_loader = env
+        .call_method(&context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .and_then(|v| v.l())
+        .map_err(|e| format!("getClassLoader: {}", e))?;
+    let cls_name = env
+        .new_string(PREP_CLASS.replace('/', "."))
+        .map_err(|e| e.to_string())?;
+    let cls = env
+        .call_method(
+            &app_loader,
+            "loadClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[JValue::Object(&cls_name.into())],
+        )
+        .and_then(|v| v.l())
+        .map_err(|e| format!("loadClass {}: {}", PREP_CLASS, e))?;
+    let cls_class: jni::objects::JClass = cls.into();
+    let result = env
+        .call_static_method(&cls_class, "requestPermission", "()I", &[])
+        .and_then(|v| v.i())
+        .map_err(|e| format!("requestPermission: {}", e))?;
+    Ok(result)
 }

@@ -25,61 +25,96 @@ class WhispVpnService : VpnService() {
     private var pendingRulesJson: String = "[]"
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> { stopVpn(); return START_NOT_STICKY }
-            else -> {
-                pendingRulesJson = intent?.getStringExtra(EXTRA_RULES_JSON) ?: "[]"
-                startVpn()
+        try {
+            when (intent?.action) {
+                ACTION_STOP -> { stopVpn(); return START_NOT_STICKY }
+                else -> {
+                    pendingRulesJson = intent?.getStringExtra(EXTRA_RULES_JSON) ?: "[]"
+                    startVpnSafe()
+                }
             }
+        } catch (t: Throwable) {
+            Log.e(TAG, "onStartCommand crashed", t)
+            try { stopForegroundCompat() } catch (_: Throwable) {}
+            stopSelf()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
-    private fun startVpn() {
-        Log.i(TAG, "starting VPN")
-        startForeground(NOTIFICATION_ID, buildNotification())
+    private fun startVpnSafe() {
+        Log.i(TAG, "startVpnSafe")
 
-        val builder = Builder()
-            .setSession("Whisp VPN")
-            .setMtu(1500)
-            .addAddress("10.55.55.2", 24)
-            .addRoute("0.0.0.0", 0)
-            .addRoute("::", 0)
-            .addDnsServer("1.1.1.1")
-            .addDnsServer("8.8.8.8")
-        try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
-
-        val pfd = builder.establish()
-        if (pfd == null) {
-            Log.e(TAG, "establish() returned null")
+        val prepareIntent = try { VpnService.prepare(this) } catch (t: Throwable) {
+            Log.e(TAG, "VpnService.prepare failed", t)
+            stopSelf(); return
+        }
+        if (prepareIntent != null) {
+            Log.w(TAG, "VPN permission NOT granted — user must approve in app first")
             stopSelf()
             return
         }
+
+        try { startForegroundCompat() } catch (t: Throwable) {
+            Log.e(TAG, "startForeground failed", t)
+            stopSelf(); return
+        }
+
+        val pfd = try {
+            Builder()
+                .setSession("Whisp VPN")
+                .setMtu(1500)
+                .addAddress("10.55.55.2", 24)
+                .addRoute("0.0.0.0", 0)
+                .addRoute("::", 0)
+                .addDnsServer("1.1.1.1")
+                .addDnsServer("8.8.8.8")
+                .also { try { it.addDisallowedApplication(packageName) } catch (_: Throwable) {} }
+                .establish()
+        } catch (t: Throwable) {
+            Log.e(TAG, "Builder.establish crashed", t); stopVpn(); return
+        }
+        if (pfd == null) { Log.e(TAG, "establish returned null"); stopVpn(); return }
         tunInterface = pfd
 
         val mihomoPath = applicationInfo.nativeLibraryDir + "/libmihomo.so"
         try {
             nativeHandle = WhispVpnNative.nativeStart(pfd.fd, this, mihomoPath, pendingRulesJson)
-            if (nativeHandle == 0L) { Log.e(TAG, "nativeStart returned 0"); stopVpn() }
+            if (nativeHandle == 0L) { Log.e(TAG, "nativeStart=0"); stopVpn() }
         } catch (t: Throwable) {
-            Log.e(TAG, "nativeStart failed", t)
-            stopVpn()
+            Log.e(TAG, "nativeStart crashed", t); stopVpn()
         }
     }
 
+    private fun startForegroundCompat() {
+        val notif = buildNotification()
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFICATION_ID, notif,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, notif)
+        }
+    }
+
+    private fun stopForegroundCompat() {
+        @Suppress("DEPRECATION") stopForeground(true)
+    }
+
     private fun stopVpn() {
+        Log.i(TAG, "stopVpn")
         if (nativeHandle != 0L) {
             try { WhispVpnNative.nativeStop(nativeHandle) } catch (_: Throwable) {}
             nativeHandle = 0L
         }
-        tunInterface?.close()
+        try { tunInterface?.close() } catch (_: Throwable) {}
         tunInterface = null
-        @Suppress("DEPRECATION")
-        stopForeground(true)
+        try { stopForegroundCompat() } catch (_: Throwable) {}
         stopSelf()
     }
 
-    override fun onDestroy() { stopVpn(); super.onDestroy() }
+    override fun onDestroy() {
+        try { stopVpn() } catch (_: Throwable) {}
+        super.onDestroy()
+    }
 
     private fun buildNotification(): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -90,8 +125,7 @@ class WhispVpnService : VpnService() {
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
         } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
+            @Suppress("DEPRECATION") Notification.Builder(this)
         }
         return builder
             .setContentTitle("Whisp VPN")
