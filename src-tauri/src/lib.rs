@@ -300,6 +300,18 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
     #[cfg(target_os = "android")]
     {
         let _ = state;
+        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            whisp_vpn_android::service_intent::is_vpn_prepared,
+        ))
+        .unwrap_or(Ok(false))
+        .unwrap_or(false);
+        if !prepared {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                whisp_vpn_android::service_intent::request_vpn_permission,
+            ));
+            return Err("Откройте диалог разрешения VPN в Android и нажмите Connect ещё раз".to_string());
+        }
+
         let settings = get_app_settings(app.clone())?;
         let rules_json = build_android_rules_json(&settings);
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
