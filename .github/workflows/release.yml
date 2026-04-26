@@ -254,18 +254,20 @@ jobs:
       - name: Build Tauri Android APK (debug, auto-signed)
         run: |
           export NDK_HOME="$ANDROID_NDK_HOME"
-          npx tauri android build --apk --debug --target aarch64 --verbose
+          set -o pipefail
+          npx tauri android build --apk --debug --target aarch64 --verbose 2>&1 | tee /tmp/tauri-build.log
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Dump gradle/kotlin logs on failure
+      - name: Show Kotlin compile errors on failure
         if: failure()
         run: |
-          echo "=== gradlew --stacktrace assembleUniversalDebug ==="
-          src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android \
-            --stacktrace --info assembleUniversalDebug 2>&1 | tail -200 || true
-          echo "=== generated Kotlin files ==="
-          find src-tauri/gen/android/app/src/main/java -name '*.kt' | xargs -I{} sh -c 'echo "---- {} ----"; cat {}' || true
+          echo "=== grep for kotlin compile errors ==="
+          grep -nE '^e: |^w: |error: |\.kt:[0-9]+:[0-9]+' /tmp/tauri-build.log | head -80 || true
+          echo "=== last 150 lines of build log ==="
+          tail -150 /tmp/tauri-build.log || true
+          echo "=== generated Kotlin files (filenames only) ==="
+          find src-tauri/gen/android/app/src/main/java -name '*.kt' || true
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
