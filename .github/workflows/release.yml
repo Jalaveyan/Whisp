@@ -254,9 +254,18 @@ jobs:
       - name: Build Tauri Android APK (debug, auto-signed)
         run: |
           export NDK_HOME="$ANDROID_NDK_HOME"
-          npx tauri android build --apk --debug --target aarch64
+          npx tauri android build --apk --debug --target aarch64 --verbose
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dump gradle/kotlin logs on failure
+        if: failure()
+        run: |
+          echo "=== gradlew --stacktrace assembleUniversalDebug ==="
+          src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android \
+            --stacktrace --info assembleUniversalDebug 2>&1 | tail -200 || true
+          echo "=== generated Kotlin files ==="
+          find src-tauri/gen/android/app/src/main/java -name '*.kt' | xargs -I{} sh -c 'echo "---- {} ----"; cat {}' || true
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
