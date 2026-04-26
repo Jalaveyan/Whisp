@@ -7,8 +7,11 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import android.widget.Toast
 
 class WhispVpnService : VpnService() {
     companion object {
@@ -24,6 +27,12 @@ class WhispVpnService : VpnService() {
     private var nativeHandle: Long = 0L
     private var pendingRulesJson: String = "[]"
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private fun toast(msg: String) {
+        Log.i(TAG, msg)
+        mainHandler.post { Toast.makeText(this, "Whisp VPN: $msg", Toast.LENGTH_LONG).show() }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
             when (intent?.action) {
@@ -34,7 +43,7 @@ class WhispVpnService : VpnService() {
                 }
             }
         } catch (t: Throwable) {
-            Log.e(TAG, "onStartCommand crashed", t)
+            toast("crash: ${t.javaClass.simpleName}: ${t.message}")
             try { stopForegroundCompat() } catch (_: Throwable) {}
             stopSelf()
         }
@@ -42,21 +51,17 @@ class WhispVpnService : VpnService() {
     }
 
     private fun startVpnSafe() {
-        Log.i(TAG, "startVpnSafe")
+        toast("starting")
 
         val prepareIntent = try { VpnService.prepare(this) } catch (t: Throwable) {
-            Log.e(TAG, "VpnService.prepare failed", t)
-            stopSelf(); return
+            toast("prepare failed: ${t.message}"); stopSelf(); return
         }
         if (prepareIntent != null) {
-            Log.w(TAG, "VPN permission NOT granted — user must approve in app first")
-            stopSelf()
-            return
+            toast("VPN permission not granted"); stopSelf(); return
         }
 
         try { startForegroundCompat() } catch (t: Throwable) {
-            Log.e(TAG, "startForeground failed", t)
-            stopSelf(); return
+            toast("startForeground failed: ${t.message}"); stopSelf(); return
         }
 
         val pfd = try {
@@ -71,17 +76,30 @@ class WhispVpnService : VpnService() {
                 .also { try { it.addDisallowedApplication(packageName) } catch (_: Throwable) {} }
                 .establish()
         } catch (t: Throwable) {
-            Log.e(TAG, "Builder.establish crashed", t); stopVpn(); return
+            toast("establish crashed: ${t.message}"); stopVpn(); return
         }
-        if (pfd == null) { Log.e(TAG, "establish returned null"); stopVpn(); return }
+        if (pfd == null) { toast("establish returned null"); stopVpn(); return }
         tunInterface = pfd
+        toast("TUN fd=${pfd.fd} OK")
 
         val mihomoPath = applicationInfo.nativeLibraryDir + "/libmihomo.so"
+        val mihomoExists = java.io.File(mihomoPath).exists()
+        toast("mihomo at $mihomoPath (exists=$mihomoExists)")
+        if (!mihomoExists) {
+            toast("mihomo binary missing — check externalBin in tauri.android.conf.json")
+            stopVpn(); return
+        }
+
         try {
             nativeHandle = WhispVpnNative.nativeStart(pfd.fd, this, mihomoPath, pendingRulesJson)
-            if (nativeHandle == 0L) { Log.e(TAG, "nativeStart=0"); stopVpn() }
+            if (nativeHandle == 0L) {
+                toast("nativeStart returned 0 (mihomo spawn failed — likely SELinux/exec restriction)")
+                stopVpn()
+            } else {
+                toast("mihomo started, handle=$nativeHandle")
+            }
         } catch (t: Throwable) {
-            Log.e(TAG, "nativeStart crashed", t); stopVpn()
+            toast("nativeStart crashed: ${t.javaClass.simpleName}: ${t.message}"); stopVpn()
         }
     }
 
