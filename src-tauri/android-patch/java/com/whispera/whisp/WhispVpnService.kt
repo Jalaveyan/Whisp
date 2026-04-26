@@ -96,7 +96,7 @@ class WhispVpnService : VpnService() {
         return builder
             .setContentTitle("Whisp VPN")
             .setContentText("Connected")
-            .setSmallIcon(android.R.drawable.stat_sys_vpn_ic)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)
             .build()
     }
