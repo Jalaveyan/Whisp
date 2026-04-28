@@ -52,26 +52,40 @@ if grep -q "WhispVpnService" "$MANIFEST"; then
   echo "[android-patch] manifest already patched"
 else
   ADDITIONS="$ROOT/android-patch/manifest/manifest-additions.xml"
-  PERMS=$(awk '/^PERMISSIONS:/{flag=1; next} /^SERVICE:/{flag=0} flag' "$ADDITIONS")
-  SERVICE=$(awk '/^SERVICE:/{flag=1; next} flag' "$ADDITIONS")
-  python3 - <<PY
-import re, pathlib
-p = pathlib.Path("$MANIFEST")
+  PERMS_FILE=$(mktemp)
+  SVC_FILE=$(mktemp)
+  awk '/^PERMISSIONS:/{flag=1; next} /^SERVICE:/{flag=0} flag' "$ADDITIONS" > "$PERMS_FILE"
+  awk '/^SERVICE:/{flag=1; next} flag' "$ADDITIONS" > "$SVC_FILE"
+  python3 - "$MANIFEST" "$PERMS_FILE" "$SVC_FILE" <<'PY'
+import re, sys, pathlib
+manifest_path, perms_path, svc_path = sys.argv[1:4]
+p = pathlib.Path(manifest_path)
 src = p.read_text(encoding="utf-8")
-perms = """$PERMS"""
-service = """$SERVICE"""
+perms = pathlib.Path(perms_path).read_text(encoding="utf-8").rstrip()
+service = pathlib.Path(svc_path).read_text(encoding="utf-8").rstrip()
 src = re.sub(r"(<manifest[^>]*>)", r"\1\n" + perms, src, count=1)
-src = re.sub(r"(</application>)", service + r"\n    \1", src, count=1)
-# AGP 4.2+ default: extractNativeLibs=false → .so грузится из APK без extract.
-# Нам нужны экстрактнутые файлы чтобы exec'ать как обычный binary.
-if 'extractNativeLibs' not in src:
-    src = re.sub(
-        r"(<application\b)",
-        r"\1 android:extractNativeLibs=\"true\"",
-        src, count=1,
-    )
+src = re.sub(r"(</application>)", service + "\n    " + r"\1", src, count=1)
 p.write_text(src, encoding="utf-8")
-print("[android-patch] manifest patched (+extractNativeLibs)")
+print("[android-patch] manifest patched")
+PY
+  rm -f "$PERMS_FILE" "$SVC_FILE"
+  echo "[android-patch] === resulting AndroidManifest.xml ==="
+  cat "$MANIFEST"
+fi
+
+# extractNativeLibs=true через Gradle (надёжнее чем manifest patching).
+# Без этого .so файлы лежат внутри APK без распаковки и File.exists() даёт false.
+APP_GRADLE="$GEN/app/build.gradle.kts"
+if [ -f "$APP_GRADLE" ] && ! grep -q "useLegacyPackaging" "$APP_GRADLE"; then
+  python3 - <<PY
+import pathlib, re
+p = pathlib.Path("$APP_GRADLE")
+src = p.read_text(encoding="utf-8")
+inject = "    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }\n"
+new = re.sub(r"(android \{)", r"\1\n" + inject, src, count=1)
+if new != src:
+    p.write_text(new, encoding="utf-8")
+    print("[android-patch] gradle: useLegacyPackaging=true added")
 PY
 fi
 
