@@ -19,6 +19,7 @@ class WhispVpnService : VpnService() {
         const val ACTION_START = "com.whispera.whisp.ACTION_VPN_START"
         const val ACTION_STOP = "com.whispera.whisp.ACTION_VPN_STOP"
         const val EXTRA_RULES_JSON = "com.whispera.whisp.EXTRA_RULES_JSON"
+        const val EXTRA_CONN_KEY = "com.whispera.whisp.EXTRA_CONN_KEY"
         const val NOTIFICATION_ID = 17
         const val CHANNEL_ID = "whisp_vpn_channel"
     }
@@ -26,6 +27,7 @@ class WhispVpnService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
     private var nativeHandle: Long = 0L
     private var pendingRulesJson: String = "[]"
+    private var pendingConnKey: String = ""
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private fun toast(msg: String) {
@@ -39,6 +41,7 @@ class WhispVpnService : VpnService() {
                 ACTION_STOP -> { stopVpn(); return START_NOT_STICKY }
                 else -> {
                     pendingRulesJson = intent?.getStringExtra(EXTRA_RULES_JSON) ?: "[]"
+                    pendingConnKey = intent?.getStringExtra(EXTRA_CONN_KEY) ?: ""
                     startVpnSafe()
                 }
             }
@@ -82,21 +85,27 @@ class WhispVpnService : VpnService() {
         tunInterface = pfd
         toast("TUN fd=${pfd.fd} OK")
 
-        val mihomoPath = applicationInfo.nativeLibraryDir + "/libmihomo.so"
-        val mihomoExists = java.io.File(mihomoPath).exists()
-        toast("mihomo at $mihomoPath (exists=$mihomoExists)")
-        if (!mihomoExists) {
-            toast("mihomo binary missing — check externalBin in tauri.android.conf.json")
-            stopVpn(); return
+        val libDir = applicationInfo.nativeLibraryDir
+        val mihomoPath = "$libDir/libmihomo.so"
+        val goClientPath = "$libDir/libwhispera-go-client.so"
+        if (!java.io.File(mihomoPath).exists()) {
+            toast("mihomo missing"); stopVpn(); return
+        }
+        if (pendingConnKey.isEmpty()) {
+            toast("conn_key empty — DIRECT mode (no proxy)")
+        } else if (!java.io.File(goClientPath).exists()) {
+            toast("go-client missing — DIRECT mode")
         }
 
         try {
-            nativeHandle = WhispVpnNative.nativeStart(pfd.fd, this, mihomoPath, pendingRulesJson)
+            nativeHandle = WhispVpnNative.nativeStart(
+                pfd.fd, this, mihomoPath, goClientPath, pendingRulesJson, pendingConnKey,
+            )
             if (nativeHandle == 0L) {
-                toast("nativeStart returned 0 (mihomo spawn failed — likely SELinux/exec restriction)")
+                toast("nativeStart returned 0 (spawn failed)")
                 stopVpn()
             } else {
-                toast("mihomo started, handle=$nativeHandle")
+                toast(if (pendingConnKey.isNotEmpty()) "VPN started (PROXY mode)" else "VPN started (DIRECT)")
             }
         } catch (t: Throwable) {
             toast("nativeStart crashed: ${t.javaClass.simpleName}: ${t.message}"); stopVpn()
