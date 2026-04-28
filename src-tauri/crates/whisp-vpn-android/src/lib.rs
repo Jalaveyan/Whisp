@@ -28,6 +28,10 @@ pub mod service_intent;
 #[cfg(target_os = "android")]
 pub mod mihomo_runner;
 
+// go-client как локальный SOCKS5 upstream для mihomo.
+#[cfg(target_os = "android")]
+pub mod go_client_runner;
+
 // PackageManager listing для UI пикера приложений в правилах маршрутизации.
 #[cfg(target_os = "android")]
 pub mod pkg_list;

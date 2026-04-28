@@ -314,8 +314,9 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
 
         let settings = get_app_settings(app.clone())?;
         let rules_json = build_android_rules_json(&settings);
+        let conn_key = settings.conn_key.clone();
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            whisp_vpn_android::service_intent::start_vpn_service(&rules_json)
+            whisp_vpn_android::service_intent::start_vpn_service(&rules_json, &conn_key)
         }));
         match res {
             Ok(Ok(())) => return Ok("Android VPN starting".to_string()),

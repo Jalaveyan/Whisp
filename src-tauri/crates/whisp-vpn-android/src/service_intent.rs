@@ -22,6 +22,7 @@ const SERVICE_CLASS: &str = "com/whispera/whisp/WhispVpnService";
 const ACTION_START: &str = "com.whispera.whisp.ACTION_VPN_START";
 const ACTION_STOP: &str = "com.whispera.whisp.ACTION_VPN_STOP";
 const EXTRA_RULES_JSON: &str = "com.whispera.whisp.EXTRA_RULES_JSON";
+const EXTRA_CONN_KEY: &str = "com.whispera.whisp.EXTRA_CONN_KEY";
 
 fn vm_and_ctx() -> Result<(JavaVM, *mut std::ffi::c_void), String> {
     // SAFETY: ndk_context::android_context() возвращает указатели,
@@ -37,7 +38,7 @@ fn vm_and_ctx() -> Result<(JavaVM, *mut std::ffi::c_void), String> {
     Ok((vm, ctx.context()))
 }
 
-fn send_action(action: &str, rules_json: Option<&str>) -> Result<(), String> {
+fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>) -> Result<(), String> {
     let (vm, ctx_ptr) = vm_and_ctx()?;
     let mut env = vm
         .attach_current_thread()
@@ -88,22 +89,20 @@ fn send_action(action: &str, rules_json: Option<&str>) -> Result<(), String> {
     )
     .map_err(|e| format!("setAction: {}", e))?;
 
-    // intent.putExtra(EXTRA_RULES_JSON, rules_json)
-    if let Some(rules) = rules_json {
-        let key = env
-            .new_string(EXTRA_RULES_JSON)
-            .map_err(|e| format!("new_string key: {}", e))?;
-        let val = env
-            .new_string(rules)
-            .map_err(|e| format!("new_string rules: {}", e))?;
+    let mut put_extra = |k: &str, v: &str| -> Result<(), String> {
+        let kj = env.new_string(k).map_err(|e| e.to_string())?;
+        let vj = env.new_string(v).map_err(|e| e.to_string())?;
         env.call_method(
             &intent,
             "putExtra",
             "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
-            &[JValue::Object(&key.into()), JValue::Object(&val.into())],
+            &[JValue::Object(&kj.into()), JValue::Object(&vj.into())],
         )
-        .map_err(|e| format!("putExtra: {}", e))?;
-    }
+        .map_err(|e| format!("putExtra {}: {}", k, e))?;
+        Ok(())
+    };
+    if let Some(rules) = rules_json { put_extra(EXTRA_RULES_JSON, rules)?; }
+    if let Some(key) = conn_key { put_extra(EXTRA_CONN_KEY, key)?; }
 
     // VPN всегда foreground (Android 8+ убьёт обычный сервис в фоне).
     env.call_method(
@@ -117,14 +116,14 @@ fn send_action(action: &str, rules_json: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-pub fn start_vpn_service(rules_json: &str) -> Result<(), String> {
-    let r = send_action(ACTION_START, Some(rules_json));
+pub fn start_vpn_service(rules_json: &str, conn_key: &str) -> Result<(), String> {
+    let r = send_action(ACTION_START, Some(rules_json), Some(conn_key));
     if r.is_ok() { set_vpn_active(true); }
     r
 }
 
 pub fn stop_vpn_service() -> Result<(), String> {
-    let r = send_action(ACTION_STOP, None);
+    let r = send_action(ACTION_STOP, None, None);
     set_vpn_active(false);
     r
 }

@@ -17,6 +17,7 @@ use jni::sys::{jint, jlong};
 use jni::JNIEnv;
 use std::path::PathBuf;
 
+use crate::go_client_runner::{spawn_go_client, wait_socks_ready, GoClientChild};
 use crate::mihomo_runner::{spawn_mihomo, MihomoChild};
 use crate::VpnCore;
 
@@ -26,6 +27,7 @@ use crate::VpnCore;
 struct VpnSession {
     _core: VpnCore,
     mihomo: Option<MihomoChild>,
+    go_client: Option<GoClientChild>,
 }
 
 fn box_handle(s: VpnSession) -> jlong {
@@ -47,6 +49,7 @@ pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeInit(
     box_handle(VpnSession {
         _core: VpnCore::new(),
         mihomo: None,
+        go_client: None,
     })
 }
 
@@ -86,48 +89,65 @@ pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeStart(
     tun_fd: jint,
     _service: JObject,
     mihomo_path: JString,
+    go_client_path: JString,
     rules_json: JString,
+    conn_key: JString,
 ) -> jlong {
-    let path_str: String = match env.get_string(&mihomo_path) {
+    let mihomo_path: String = match env.get_string(&mihomo_path) {
         Ok(s) => s.into(),
-        Err(e) => {
-            eprintln!("[whisp-vpn-android] mihomo_path get_string failed: {}", e);
-            return 0;
-        }
+        Err(e) => { eprintln!("[whisp-vpn-android] mihomo_path: {}", e); return 0; }
     };
-    let mihomo_path = PathBuf::from(path_str);
-
+    let go_client_path: String =
+        env.get_string(&go_client_path).map(Into::into).unwrap_or_default();
     let rules_str: String = env.get_string(&rules_json).map(Into::into).unwrap_or_default();
-    let mut session = VpnSession { _core: VpnCore::new(), mihomo: None };
+    let conn_key: String = env.get_string(&conn_key).map(Into::into).unwrap_or_default();
+
+    let mihomo_path = PathBuf::from(mihomo_path);
+    let mut session = VpnSession { _core: VpnCore::new(), mihomo: None, go_client: None };
     if !rules_str.trim().is_empty() && rules_str.trim() != "[]" {
-        match session._core.load_rules_json(&rules_str) {
-            Ok(n) => eprintln!("[whisp-vpn-android] loaded {} rules", n),
-            Err(e) => eprintln!("[whisp-vpn-android] rules_json parse failed: {}", e),
-        }
+        let _ = session._core.load_rules_json(&rules_str);
     }
 
-    eprintln!(
-        "[whisp-vpn-android] nativeStart fd={} mihomo={} rules_count={}",
-        tun_fd, mihomo_path.display(), session._core.rules().rules().len()
-    );
+    // 1. go-client как локальный SOCKS5 upstream — только если есть key и binary.
+    let socks_addr = "127.0.0.1:1080";
+    let mut have_upstream = false;
+    if !conn_key.is_empty() && !go_client_path.is_empty() {
+        let gc_path = PathBuf::from(&go_client_path);
+        match spawn_go_client(&gc_path, &conn_key, socks_addr) {
+            Ok(c) => {
+                eprintln!("[whisp-vpn-android] go-client pid={}", c.child.id());
+                session.go_client = Some(c);
+                if wait_socks_ready(socks_addr, 5000) {
+                    have_upstream = true;
+                    eprintln!("[whisp-vpn-android] go-client SOCKS5 ready");
+                } else {
+                    eprintln!("[whisp-vpn-android] go-client SOCKS5 not ready in 5s, fallback DIRECT");
+                }
+            }
+            Err(e) => eprintln!("[whisp-vpn-android] spawn_go_client: {}", e),
+        }
+    } else {
+        eprintln!("[whisp-vpn-android] no conn_key/go-client — DIRECT mode");
+    }
 
-    // socks_upstream=None — smoke режим (DIRECT и REJECT работают, PROXY downgrade
-    // в DIRECT). Когда подвезём go-client как 127.0.0.1:1080, передадим Some.
+    // 2. mihomo с tun fd. Если go-client поднял 1080 → MATCH,PROXY,
+    //    иначе MATCH,DIRECT (transparent passthrough, тоннель есть но без
+    //    прокси-сервера).
     let rules: Vec<crate::RoutingRule> = session._core.rules().rules().to_vec();
+    let upstream = if have_upstream { Some(socks_addr) } else { None };
     let mihomo = match spawn_mihomo(
         &mihomo_path,
         tun_fd as std::os::unix::io::RawFd,
-        None,
+        upstream,
         &rules,
     ) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[whisp-vpn-android] spawn_mihomo failed: {}", e);
+            eprintln!("[whisp-vpn-android] spawn_mihomo: {}", e);
+            if let Some(mut g) = session.go_client.take() { g.kill(); }
             return 0;
         }
     };
-    eprintln!("[whisp-vpn-android] mihomo spawned pid={}", mihomo.child.id());
-
     session.mihomo = Some(mihomo);
     box_handle(session)
 }
@@ -142,9 +162,8 @@ pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeStop(
         return 0;
     }
     let mut session = unsafe { Box::from_raw(handle as *mut VpnSession) };
-    if let Some(mut m) = session.mihomo.take() {
-        m.kill();
-    }
+    if let Some(mut m) = session.mihomo.take() { m.kill(); }
+    if let Some(mut g) = session.go_client.take() { g.kill(); }
     eprintln!("[whisp-vpn-android] nativeStop done");
     1
 }
@@ -159,7 +178,6 @@ pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeFree(
         return;
     }
     let mut session = unsafe { Box::from_raw(handle as *mut VpnSession) };
-    if let Some(mut m) = session.mihomo.take() {
-        m.kill();
-    }
+    if let Some(mut m) = session.mihomo.take() { m.kill(); }
+    if let Some(mut g) = session.go_client.take() { g.kill(); }
 }
