@@ -11,6 +11,12 @@
 
 use jni::objects::{JObject, JValue};
 use jni::JavaVM;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static VPN_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn is_vpn_active() -> bool { VPN_ACTIVE.load(Ordering::SeqCst) }
+pub fn set_vpn_active(v: bool) { VPN_ACTIVE.store(v, Ordering::SeqCst); }
 
 const SERVICE_CLASS: &str = "com/whispera/whisp/WhispVpnService";
 const ACTION_START: &str = "com.whispera.whisp.ACTION_VPN_START";
@@ -112,11 +118,15 @@ fn send_action(action: &str, rules_json: Option<&str>) -> Result<(), String> {
 }
 
 pub fn start_vpn_service(rules_json: &str) -> Result<(), String> {
-    send_action(ACTION_START, Some(rules_json))
+    let r = send_action(ACTION_START, Some(rules_json));
+    if r.is_ok() { set_vpn_active(true); }
+    r
 }
 
 pub fn stop_vpn_service() -> Result<(), String> {
-    send_action(ACTION_STOP, None)
+    let r = send_action(ACTION_STOP, None);
+    set_vpn_active(false);
+    r
 }
 
 const PREP_CLASS: &str = "com/whispera/whisp/WhispVpnPrep";
