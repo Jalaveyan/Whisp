@@ -662,9 +662,17 @@ fn disconnect(state: tauri::State<AppState>) -> Result<String, String> {
 
 #[tauri::command]
 fn get_status(state: tauri::State<AppState>) -> Result<bool, String> {
-    let mut mihomo = state.mihomo.lock().map_err(|e| e.to_string())?;
-    let mut gc = state.go_client.lock().map_err(|e| e.to_string())?;
-    Ok(mihomo.is_running() && gc.is_running())
+    #[cfg(target_os = "android")]
+    {
+        let _ = state;
+        return Ok(whisp_vpn_android::service_intent::is_vpn_active());
+    }
+    #[allow(unreachable_code)]
+    {
+        let mut mihomo = state.mihomo.lock().map_err(|e| e.to_string())?;
+        let mut gc = state.go_client.lock().map_err(|e| e.to_string())?;
+        Ok(mihomo.is_running() && gc.is_running())
+    }
 }
 
 const CONTROL_PORT_MAIN: u16 = 10801;
