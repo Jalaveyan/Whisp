@@ -202,10 +202,11 @@ mode: rule
 
 tun:
   enable: true
-  stack: gvisor
+  stack: system
   device: fd://{tun_fd}
   auto-route: false
   auto-detect-interface: false
+  mtu: 1500
   dns-hijack:
     - any:53
 
