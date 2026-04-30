@@ -7,7 +7,6 @@
 
 use crate::rules::RoutingRule;
 use std::fs;
-use std::io::Write;
 use std::os::unix::io::RawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -44,11 +43,18 @@ pub fn spawn_mihomo(
     let cfg_path = work_dir.join("config.json");
     fs::write(&cfg_path, &cfg).map_err(|e| format!("write config.json: {}", e))?;
 
+    // Логи sing-box → файл в work_dir; забрать через:
+    // adb shell run-as com.whispera.whisp find cache -name singbox.log
+    // adb shell run-as com.whispera.whisp cat cache/whisp-singbox-<PID>/singbox.log
+    let log_path = work_dir.join("singbox.log");
+    let log_file = fs::File::create(&log_path).map_err(|e| format!("create log: {}", e))?;
+    let log_file2 = log_file.try_clone().map_err(|e| format!("clone log: {}", e))?;
+
     let mut cmd = Command::new(bin_path);
     cmd.arg("run").arg("-c").arg(&cfg_path)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_file2));
 
     let preserve_fd = tun_fd;
     unsafe {
@@ -62,24 +68,10 @@ pub fn spawn_mihomo(
         });
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("spawn sing-box: {}", e))?;
-    drain_to_log(child.stdout.take());
-    drain_to_log(child.stderr.take());
+    let child = cmd.spawn().map_err(|e| format!("spawn sing-box: {}", e))?;
     Ok(MihomoChild { child, work_dir })
 }
 
-fn drain_to_log<R: std::io::Read + Send + 'static>(src: Option<R>) {
-    let Some(mut src) = src else { return };
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match src.read(&mut buf) {
-                Ok(0) | Err(_) => return,
-                Ok(n) => { let _ = std::io::stderr().write_all(&buf[..n]); }
-            }
-        }
-    });
-}
 
 fn generate_config(tun_fd: RawFd, socks_upstream: Option<&str>, tun_stack: &str) -> String {
     let stack = match tun_stack.to_lowercase().as_str() {
