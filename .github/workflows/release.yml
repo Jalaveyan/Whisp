@@ -235,9 +235,11 @@ jobs:
           export CXX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++"
 
           mkdir -p "$GITHUB_WORKSPACE/src-tauri/binaries"
+          # main package у mihomo в корне репо, не в cmd/.
+          ls -la
           go build -trimpath -tags "with_gvisor" -ldflags "-s -w" \
             -o "$GITHUB_WORKSPACE/src-tauri/binaries/mihomo-aarch64-linux-android" \
-            ./cmd/mihomo
+            .
           ls -la "$GITHUB_WORKSPACE/src-tauri/binaries/mihomo-aarch64-linux-android"
           file "$GITHUB_WORKSPACE/src-tauri/binaries/mihomo-aarch64-linux-android"
 
