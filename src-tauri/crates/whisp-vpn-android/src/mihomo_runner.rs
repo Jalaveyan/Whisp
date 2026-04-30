@@ -87,7 +87,9 @@ fn generate_config(tun_fd: RawFd, socks_upstream: Option<&str>, tun_stack: &str)
         _ => "system",
     };
 
-    let (final_outbound, outbounds_extra) = match socks_upstream {
+    // DoT через SOCKS5 когда есть upstream — go-client не поддерживает UDP ASSOCIATE,
+    // поэтому plain UDP DNS через SOCKS5 не работает. DoT = TCP = работает.
+    let (final_outbound, outbounds_extra, dns_tag, dns_addr, dns_detour) = match socks_upstream {
         Some(addr) => {
             let (host, port) = addr.split_once(':').unwrap_or(("127.0.0.1", "1080"));
             (
@@ -102,14 +104,27 @@ fn generate_config(tun_fd: RawFd, socks_upstream: Option<&str>, tun_stack: &str)
       "version": "5"
     }}"#
                 ),
+                "dns-proxy",
+                "tls://1.1.1.1",
+                "upstream",
             )
         }
-        None => ("direct", String::new()),
+        None => ("direct", String::new(), "dns-direct", "1.1.1.1", "direct"),
     };
 
     format!(
         r#"{{
-  "log": {{ "level": "error" }},
+  "log": {{ "level": "warn" }},
+  "dns": {{
+    "servers": [
+      {{
+        "tag": "{dns_tag}",
+        "address": "{dns_addr}",
+        "detour": "{dns_detour}"
+      }}
+    ],
+    "final": "{dns_tag}"
+  }},
   "inbounds": [
     {{
       "type": "tun",
@@ -121,7 +136,8 @@ fn generate_config(tun_fd: RawFd, socks_upstream: Option<&str>, tun_stack: &str)
       "stack": "{stack}",
       "address": ["10.55.55.2/24"],
       "fd": {tun_fd},
-      "sniff": true
+      "sniff": true,
+      "sniff_override_destination": true
     }}
   ],
   "outbounds": [
