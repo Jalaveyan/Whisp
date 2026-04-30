@@ -140,6 +140,7 @@ pub extern "system" fn Java_com_whispera_whisp_WhispVpnNative_nativeStart(
         tun_fd as std::os::unix::io::RawFd,
         upstream,
         &rules,
+        "system",
     ) {
         Ok(c) => c,
         Err(e) => {
