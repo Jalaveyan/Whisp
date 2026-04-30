@@ -234,11 +234,13 @@ jobs:
 
       - name: Build sing-box AAR via gomobile
         shell: bash
+        env:
+          GOFLAGS: "-mod=mod"
+          GONOSUMDB: "*"
         run: |
           export PATH="$PATH:$(go env GOPATH)/bin"
           cd go-android
-          go mod download
-          # Устанавливаем из версии в go.mod, не @latest — новые версии сломали bind
+          go mod tidy
           go install golang.org/x/mobile/cmd/gomobile
           go install golang.org/x/mobile/cmd/gobind
           gomobile init
