@@ -12,21 +12,21 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.widget.Toast
+import singbox.Singbox
 
 class WhispVpnService : VpnService() {
     companion object {
         const val TAG = "WhispVpnService"
         const val ACTION_START = "com.whispera.whisp.ACTION_VPN_START"
-        const val ACTION_STOP = "com.whispera.whisp.ACTION_VPN_STOP"
-        const val EXTRA_RULES_JSON = "com.whispera.whisp.EXTRA_RULES_JSON"
+        const val ACTION_STOP  = "com.whispera.whisp.ACTION_VPN_STOP"
         const val EXTRA_CONN_KEY = "com.whispera.whisp.EXTRA_CONN_KEY"
         const val NOTIFICATION_ID = 17
         const val CHANNEL_ID = "whisp_vpn_channel"
     }
 
     private var tunInterface: ParcelFileDescriptor? = null
-    private var nativeHandle: Long = 0L
-    private var pendingRulesJson: String = "[]"
+    private var goClientProc: Process? = null
+    private var singBoxRunning = false
     private var pendingConnKey: String = ""
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -40,7 +40,6 @@ class WhispVpnService : VpnService() {
             when (intent?.action) {
                 ACTION_STOP -> { stopVpn(); return START_NOT_STICKY }
                 else -> {
-                    pendingRulesJson = intent?.getStringExtra(EXTRA_RULES_JSON) ?: "[]"
                     pendingConnKey = intent?.getStringExtra(EXTRA_CONN_KEY) ?: ""
                     startVpnSafe()
                 }
@@ -56,60 +55,126 @@ class WhispVpnService : VpnService() {
     private fun startVpnSafe() {
         toast("starting")
 
-        val prepareIntent = try { VpnService.prepare(this) } catch (t: Throwable) {
-            toast("prepare failed: ${t.message}"); stopSelf(); return
-        }
-        if (prepareIntent != null) {
+        if (VpnService.prepare(this) != null) {
             toast("VPN permission not granted"); stopSelf(); return
         }
 
         try { startForegroundCompat() } catch (t: Throwable) {
-            toast("startForeground failed: ${t.message}"); stopSelf(); return
+            toast("startForeground: ${t.message}"); stopSelf(); return
         }
 
         val pfd = try {
             Builder()
                 .setSession("Whisp VPN")
-                .setMtu(1500)
-                .addAddress("10.55.55.2", 24)
+                .setMtu(9000)
+                .addAddress("172.19.0.1", 30)
                 .addRoute("0.0.0.0", 0)
                 .addRoute("::", 0)
                 .addDnsServer("1.1.1.1")
-                .addDnsServer("8.8.8.8")
                 .also { try { it.addDisallowedApplication(packageName) } catch (_: Throwable) {} }
                 .establish()
         } catch (t: Throwable) {
-            toast("establish crashed: ${t.message}"); stopVpn(); return
-        }
-        if (pfd == null) { toast("establish returned null"); stopVpn(); return }
-        tunInterface = pfd
-        toast("TUN fd=${pfd.fd} OK")
+            toast("establish: ${t.message}"); stopVpn(); return
+        } ?: run { toast("establish returned null"); stopVpn(); return }
 
+        tunInterface = pfd
+        toast("TUN fd=${pfd.fd}")
+
+        // 1. Запускаем go-client как SOCKS5 upstream на :1080
         val libDir = applicationInfo.nativeLibraryDir
-        val mihomoPath = "$libDir/libmihomo.so"
         val goClientPath = "$libDir/libwhispera-go-client.so"
-        if (!java.io.File(mihomoPath).exists()) {
-            toast("mihomo missing"); stopVpn(); return
+        if (pendingConnKey.isNotEmpty() && java.io.File(goClientPath).exists()) {
+            try {
+                goClientProc = ProcessBuilder(goClientPath,
+                    "-key", pendingConnKey,
+                    "-socks", "127.0.0.1:1080",
+                    "-no-tun")
+                    .redirectErrorStream(true)
+                    .start()
+                Thread.sleep(800) // дать go-client подняться
+                toast("go-client started")
+            } catch (t: Throwable) {
+                toast("go-client failed: ${t.message}")
+            }
         }
-        if (pendingConnKey.isEmpty()) {
-            toast("conn_key empty — DIRECT mode (no proxy)")
-        } else if (!java.io.File(goClientPath).exists()) {
-            toast("go-client missing — DIRECT mode")
-        }
+
+        // 2. Запускаем sing-box через gomobile AAR
+        val config = buildSingBoxConfig(
+            socksAddr = if (goClientProc != null) "127.0.0.1" else null,
+            socksPort = 1080
+        )
 
         try {
-            nativeHandle = WhispVpnNative.nativeStart(
-                pfd.fd, this, mihomoPath, goClientPath, pendingRulesJson, pendingConnKey,
-            )
-            if (nativeHandle == 0L) {
-                toast("nativeStart returned 0 (spawn failed)")
-                stopVpn()
-            } else {
-                toast(if (pendingConnKey.isNotEmpty()) "VPN started (PROXY mode)" else "VPN started (DIRECT)")
-            }
+            Singbox.start(pfd.fd.toLong(), config)
+            singBoxRunning = true
+            toast("VPN started")
         } catch (t: Throwable) {
-            toast("nativeStart crashed: ${t.javaClass.simpleName}: ${t.message}"); stopVpn()
+            toast("sing-box: ${t.message}")
+            stopVpn()
         }
+    }
+
+    private fun buildSingBoxConfig(socksAddr: String?, socksPort: Int): String {
+        val outbounds = buildString {
+            append("""{"type":"direct","tag":"direct"}""")
+            if (socksAddr != null) {
+                append(""",{"type":"socks","tag":"proxy","server":"$socksAddr","server_port":$socksPort,"version":"5"}""")
+            }
+        }
+        val finalOut = if (socksAddr != null) "proxy" else "direct"
+
+        return """
+        {
+          "log": {"level": "warn"},
+          "dns": {
+            "servers": [
+              {"tag":"remote","address":"tls://1.1.1.1","detour":"$finalOut"},
+              {"tag":"local","address":"local","detour":"direct"}
+            ],
+            "rules": [{"outbound":"any","server":"local"}],
+            "independent_cache": true,
+            "fakeip": {
+              "enabled": true,
+              "inet4_range": "198.18.0.0/15"
+            },
+            "strategy": "prefer_ipv4"
+          },
+          "inbounds": [{
+            "type": "tun",
+            "tag": "tun-in",
+            "address": ["172.19.0.1/30"],
+            "mtu": 9000,
+            "auto_route": false,
+            "stack": "gvisor",
+            "sniff": true,
+            "sniff_override_destination": true
+          }],
+          "outbounds": [$outbounds],
+          "route": {
+            "final": "$finalOut",
+            "auto_detect_interface": false
+          }
+        }
+        """.trimIndent()
+    }
+
+    private fun stopVpn() {
+        Log.i(TAG, "stopVpn")
+        if (singBoxRunning) {
+            try { Singbox.stop() } catch (_: Throwable) {}
+            singBoxRunning = false
+        }
+        goClientProc?.destroy()
+        goClientProc = null
+        try { tunInterface?.close() } catch (_: Throwable) {}
+        tunInterface = null
+        try { stopForegroundCompat() } catch (_: Throwable) {}
+        stopSelf()
+    }
+
+    override fun onDestroy() {
+        try { stopVpn() } catch (_: Throwable) {}
+        super.onDestroy()
     }
 
     private fun startForegroundCompat() {
@@ -126,34 +191,17 @@ class WhispVpnService : VpnService() {
         @Suppress("DEPRECATION") stopForeground(true)
     }
 
-    private fun stopVpn() {
-        Log.i(TAG, "stopVpn")
-        if (nativeHandle != 0L) {
-            try { WhispVpnNative.nativeStop(nativeHandle) } catch (_: Throwable) {}
-            nativeHandle = 0L
-        }
-        try { tunInterface?.close() } catch (_: Throwable) {}
-        tunInterface = null
-        try { stopForegroundCompat() } catch (_: Throwable) {}
-        stopSelf()
-    }
-
-    override fun onDestroy() {
-        try { stopVpn() } catch (_: Throwable) {}
-        super.onDestroy()
-    }
-
     private fun buildNotification(): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val ch = NotificationChannel(CHANNEL_ID, "Whisp VPN", NotificationManager.IMPORTANCE_LOW)
-            nm.createNotificationChannel(ch)
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Whisp VPN", NotificationManager.IMPORTANCE_LOW)
+            )
         }
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             Notification.Builder(this, CHANNEL_ID)
-        } else {
+        else
             @Suppress("DEPRECATION") Notification.Builder(this)
-        }
         return builder
             .setContentTitle("Whisp VPN")
             .setContentText("Connected")

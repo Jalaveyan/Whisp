@@ -22,7 +22,7 @@ cp "$ROOT/android-patch/java/com/whispera/whisp/"*.kt "$PKG_DIR/"
 # с правом exec (data dir noexec на Android 10+).
 JNILIBS="$GEN/app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNILIBS"
-for sidecar in mihomo whispera-go-client whispera-ml-server; do
+for sidecar in whispera-go-client whispera-ml-server; do
   src="$ROOT/binaries/${sidecar}-aarch64-linux-android"
   dst="$JNILIBS/lib${sidecar}.so"
   if [ -f "$src" ]; then
@@ -76,16 +76,25 @@ fi
 # extractNativeLibs=true через Gradle (надёжнее чем manifest patching).
 # Без этого .so файлы лежат внутри APK без распаковки и File.exists() даёт false.
 APP_GRADLE="$GEN/app/build.gradle.kts"
-if [ -f "$APP_GRADLE" ] && ! grep -q "useLegacyPackaging" "$APP_GRADLE"; then
+if [ -f "$APP_GRADLE" ]; then
   python3 - <<PY
 import pathlib, re
 p = pathlib.Path("$APP_GRADLE")
 src = p.read_text(encoding="utf-8")
-inject = "    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }\n"
-new = re.sub(r"(android \{)", r"\1\n" + inject, src, count=1)
-if new != src:
-    p.write_text(new, encoding="utf-8")
+
+# useLegacyPackaging
+if "useLegacyPackaging" not in src:
+    inject = "    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }\n"
+    src = re.sub(r"(android \{)", r"\1\n" + inject, src, count=1)
     print("[android-patch] gradle: useLegacyPackaging=true added")
+
+# singbox.aar как fileTree dependency
+if "singbox.aar" not in src:
+    dep = '    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))\n'
+    src = re.sub(r"(dependencies \{)", r"\1\n" + dep, src, count=1)
+    print("[android-patch] gradle: singbox.aar dependency added")
+
+p.write_text(src, encoding="utf-8")
 PY
 fi
 

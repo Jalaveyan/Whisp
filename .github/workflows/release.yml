@@ -181,10 +181,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Setup Go (для сборки mihomo из исходников)
+      - name: Setup Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.25.x'
+          go-version: '1.22.x'
 
       - name: Install Rust stable + Android targets
         uses: dtolnay/rust-toolchain@stable
@@ -212,40 +212,14 @@ jobs:
           out-file-path: src-tauri/binaries/
         continue-on-error: true
 
-      - name: Download sing-box (Android arm64, official build)
-        shell: bash
-        run: |
-          # sing-box (sagernet) — official Android builds корректно работают
-          # с external TUN-fd через config: { inbounds: [{type: tun, fd: N}] }.
-          # Mihomo standalone не работает в этом сценарии без gomobile-glue.
-          SB_VER="1.10.7"
-          ASSET="sing-box-${SB_VER}-android-arm64.tar.gz"
-          URL="https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/${ASSET}"
-          mkdir -p src-tauri/binaries
-          curl -fsSL "$URL" -o /tmp/sing-box.tar.gz
-          file /tmp/sing-box.tar.gz | grep -q gzip || \
-            (echo "Not gzip — likely 404"; head -c 500 /tmp/sing-box.tar.gz; exit 1)
-          tar -xzf /tmp/sing-box.tar.gz -C /tmp/
-          # Архив: sing-box-<ver>-android-arm64/sing-box — используем прямой путь.
-          BIN="/tmp/sing-box-${SB_VER}-android-arm64/sing-box"
-          if [ ! -f "$BIN" ]; then echo "sing-box binary not found: $BIN"; ls -R /tmp/sing-box*; exit 1; fi
-          # Сохраняем под именем mihomo-* чтобы остальной pipeline не менять.
-          cp "$BIN" src-tauri/binaries/mihomo-aarch64-linux-android
-          chmod +x src-tauri/binaries/mihomo-aarch64-linux-android
-          file src-tauri/binaries/mihomo-aarch64-linux-android
-          ls -la src-tauri/binaries/
-
       - name: chmod +x sidecars
-        run: chmod +x src-tauri/binaries/* || true
+        run: chmod +x src-tauri/binaries/* 2>/dev/null || true
 
       - name: Install frontend deps
         run: npm ci
 
       - name: Upscale icon source to 1024x1024 for Tauri icon generator
         run: |
-          # Tauri icon хочет 1024×1024+; у нас в репо max 256×256.
-          # ImageMagick v6 'convert' deprecated, Pillow на runner'е может
-          # отсутствовать — ставим явно через pip (быстро, no-deps).
           python3 -m pip install --quiet --user Pillow
           mkdir -p src-tauri/icons-tmp
           python3 -c "from PIL import Image; Image.open('src-tauri/icons/128x128@2x.png').resize((1024,1024), Image.LANCZOS).save('src-tauri/icons-tmp/source.png')"
@@ -257,6 +231,23 @@ jobs:
           npx tauri android init
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build sing-box AAR via gomobile
+        shell: bash
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          gomobile init
+          mkdir -p src-tauri/gen/android/app/libs
+          cd go-android
+          go mod download
+          gomobile bind \
+            -target=android/arm64 \
+            -androidapi=21 \
+            -o ../src-tauri/gen/android/app/libs/singbox.aar \
+            .
+          ls -lh ../src-tauri/gen/android/app/libs/singbox.aar
 
       - name: Apply VpnService patch (Kotlin + manifest)
         run: bash src-tauri/android-patch/apply.sh
