@@ -226,9 +226,9 @@ jobs:
           file /tmp/sing-box.tar.gz | grep -q gzip || \
             (echo "Not gzip — likely 404"; head -c 500 /tmp/sing-box.tar.gz; exit 1)
           tar -xzf /tmp/sing-box.tar.gz -C /tmp/
-          # Архив распаковывается в sing-box-<ver>-android-arm64/sing-box
-          BIN=$(find /tmp -name sing-box -type f -executable | head -n1)
-          if [ -z "$BIN" ]; then echo "sing-box binary not found in archive"; ls -R /tmp/sing-box*; exit 1; fi
+          # Архив: sing-box-<ver>-android-arm64/sing-box — используем прямой путь.
+          BIN="/tmp/sing-box-${SB_VER}-android-arm64/sing-box"
+          if [ ! -f "$BIN" ]; then echo "sing-box binary not found: $BIN"; ls -R /tmp/sing-box*; exit 1; fi
           # Сохраняем под именем mihomo-* чтобы остальной pipeline не менять.
           cp "$BIN" src-tauri/binaries/mihomo-aarch64-linux-android
           chmod +x src-tauri/binaries/mihomo-aarch64-linux-android
