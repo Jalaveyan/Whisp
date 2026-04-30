@@ -181,6 +181,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Setup Go (для сборки mihomo из исходников)
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.x'
+
       - name: Install Rust stable + Android targets
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -207,19 +212,34 @@ jobs:
           out-file-path: src-tauri/binaries/
         continue-on-error: true
 
-      - name: Download mihomo (android-arm64-v8)
+      - name: Build mihomo from source (Android arm64, with proper TUN-fd support)
         shell: bash
         run: |
           MIHOMO_VER="v1.19.8"
-          mkdir -p src-tauri/binaries
-          # Asset реально зовётся mihomo-android-arm64-v8-vX.Y.Z.gz, не arm64.
-          ASSET="mihomo-android-arm64-v8-${MIHOMO_VER}.gz"
-          URL="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/${ASSET}"
-          curl -fsSL "$URL" -o mihomo.gz
-          file mihomo.gz | grep -q gzip || (echo "Not a gzip — likely 404 HTML"; head -c 500 mihomo.gz; exit 1)
-          gunzip -f mihomo.gz
-          # Tauri sidecar naming convention: <name>-<rust-target-triple>
-          mv mihomo src-tauri/binaries/mihomo-aarch64-linux-android
+          # Стандартный mihomo-android-arm64-v8 c релизов MetaCubeX компилируется
+          # без cgo и не работает корректно с external TUN-fd от VpnService.
+          # Собираем с CGO_ENABLED=1 + NDK aarch64-clang — gVisor TUN stack
+          # тогда правильно отдаёт ответы обратно в fd.
+          NDK_DIR=$(ls -1d "$ANDROID_HOME/ndk/"*/ 2>/dev/null | head -n1 | sed 's:/$::')
+          export ANDROID_NDK_HOME="$NDK_DIR"
+          echo "NDK: $ANDROID_NDK_HOME"
+
+          git clone --depth 1 --branch "$MIHOMO_VER" \
+            https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
+          cd /tmp/mihomo-src
+
+          export GOOS=android
+          export GOARCH=arm64
+          export CGO_ENABLED=1
+          export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          export CXX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++"
+
+          mkdir -p "$GITHUB_WORKSPACE/src-tauri/binaries"
+          go build -trimpath -tags "with_gvisor" -ldflags "-s -w" \
+            -o "$GITHUB_WORKSPACE/src-tauri/binaries/mihomo-aarch64-linux-android" \
+            ./cmd/mihomo
+          ls -la "$GITHUB_WORKSPACE/src-tauri/binaries/mihomo-aarch64-linux-android"
+          file "$GITHUB_WORKSPACE/src-tauri/binaries/mihomo-aarch64-linux-android"
 
       - name: chmod +x sidecars
         run: chmod +x src-tauri/binaries/* || true
