@@ -235,16 +235,18 @@ jobs:
       - name: Build sing-box AAR via gomobile
         shell: bash
         env:
-          GOFLAGS: "-mod=mod"
           GONOSUMDB: "*"
+          GOFLAGS: "-mod=mod"
         run: |
           export PATH="$PATH:$(go env GOPATH)/bin"
-          cd go-android
-          go mod tidy
-          go install golang.org/x/mobile/cmd/gomobile
-          go install golang.org/x/mobile/cmd/gobind
+          # Ставим gomobile строго той же версии что в go.mod — не @latest
+          MOBILE_VER="v0.0.0-20240213143359-d1f7d3436075"
+          go install golang.org/x/mobile/cmd/gomobile@${MOBILE_VER}
+          go install golang.org/x/mobile/cmd/gobind@${MOBILE_VER}
           gomobile init
-          mkdir -p ../src-tauri/gen/android/app/libs
+          mkdir -p src-tauri/gen/android/app/libs
+          cd go-android
+          go mod download
           gomobile bind \
             -target=android/arm64 \
             -androidapi=21 \
