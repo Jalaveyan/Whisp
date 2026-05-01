@@ -38,7 +38,7 @@ fn vm_and_ctx() -> Result<(JavaVM, *mut std::ffi::c_void), String> {
     Ok((vm, ctx.context()))
 }
 
-fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>) -> Result<(), String> {
+fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>, stop: bool) -> Result<(), String> {
     let (vm, ctx_ptr) = vm_and_ctx()?;
     let mut env = vm
         .attach_current_thread()
@@ -104,26 +104,37 @@ fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>) -
     if let Some(rules) = rules_json { put_extra(EXTRA_RULES_JSON, rules)?; }
     if let Some(key) = conn_key { put_extra(EXTRA_CONN_KEY, key)?; }
 
-    // VPN всегда foreground (Android 8+ убьёт обычный сервис в фоне).
-    env.call_method(
-        &context,
-        "startForegroundService",
-        "(Landroid/content/Intent;)Landroid/content/ComponentName;",
-        &[JValue::Object(&intent)],
-    )
-    .map_err(|e| format!("startForegroundService: {}", e))?;
+    if stop {
+        // stopService безопасен даже если сервис уже мёртв.
+        env.call_method(
+            &context,
+            "stopService",
+            "(Landroid/content/Intent;)Z",
+            &[JValue::Object(&intent)],
+        )
+        .map_err(|e| format!("stopService: {}", e))?;
+    } else {
+        // VPN всегда foreground (Android 8+ убьёт обычный сервис в фоне).
+        env.call_method(
+            &context,
+            "startForegroundService",
+            "(Landroid/content/Intent;)Landroid/content/ComponentName;",
+            &[JValue::Object(&intent)],
+        )
+        .map_err(|e| format!("startForegroundService: {}", e))?;
+    }
 
     Ok(())
 }
 
 pub fn start_vpn_service(rules_json: &str, conn_key: &str) -> Result<(), String> {
-    let r = send_action(ACTION_START, Some(rules_json), Some(conn_key));
+    let r = send_action(ACTION_START, Some(rules_json), Some(conn_key), false);
     if r.is_ok() { set_vpn_active(true); }
     r
 }
 
 pub fn stop_vpn_service() -> Result<(), String> {
-    let r = send_action(ACTION_STOP, None, None);
+    let r = send_action(ACTION_STOP, None, None, true);
     set_vpn_active(false);
     r
 }
