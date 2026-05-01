@@ -5,6 +5,7 @@ package singbox
 
 import (
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/sagernet/sing-box/experimental/libbox"
@@ -46,13 +47,19 @@ func (p *platform) ClearDNSCache()                                          {}
 func (p *platform) SendNotification(notification *libbox.Notification) error { return nil }
 
 // Start запускает sing-box. fd — ParcelFileDescriptor.getFd() из Kotlin.
+// workDir — filesDir приложения (writable); sing-box создаёт там cache.db.
 // configJSON — стандартный sing-box JSON без поля fd в tun inbound.
-func Start(fd int, configJSON string) error {
+func Start(fd int, workDir string, configJSON string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if service != nil {
 		return fmt.Errorf("already running")
+	}
+
+	if workDir != "" {
+		_ = os.MkdirAll(workDir, 0o755)
+		_ = os.Chdir(workDir)
 	}
 
 	s, err := libbox.NewService(configJSON, &platform{tunFd: int32(fd)})

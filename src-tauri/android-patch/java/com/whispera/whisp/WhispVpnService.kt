@@ -105,8 +105,9 @@ class WhispVpnService : VpnService() {
         )
 
         try {
-            Log.i(TAG, "sing-box config: $config")
-            Singbox.start(pfd.fd.toLong(), config)
+            val workDir = filesDir.absolutePath
+            Log.i(TAG, "sing-box workDir=$workDir config: $config")
+            Singbox.start(pfd.fd.toLong(), workDir, config)
             singBoxRunning = true
             toast("VPN started")
         } catch (t: Throwable) {
