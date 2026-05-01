@@ -11,6 +11,7 @@ import "C"
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 	"sync"
 	"unsafe"
 
@@ -39,9 +40,9 @@ func (p *platform) OpenTun(options libbox.TunOptions) (int32, error) {
 	alog(fmt.Sprintf("OpenTun called, returning fd=%d", p.tunFd))
 	return p.tunFd, nil
 }
-func (p *platform) AutoDetectInterfaceControl(fd int32) error { return nil }
-func (p *platform) UsePlatformAutoDetectInterfaceControl() bool { return false }
-func (p *platform) UsePlatformDefaultInterfaceMonitor() bool    { return false }
+func (p *platform) AutoDetectInterfaceControl(fd int32) error              { return nil }
+func (p *platform) UsePlatformAutoDetectInterfaceControl() bool            { return false }
+func (p *platform) UsePlatformDefaultInterfaceMonitor() bool               { return false }
 func (p *platform) StartDefaultInterfaceMonitor(l libbox.InterfaceUpdateListener) error {
 	return nil
 }
@@ -66,42 +67,55 @@ func (p *platform) ClearDNSCache()                                           {}
 func (p *platform) SendNotification(notification *libbox.Notification) error { return nil }
 
 // Start запускает sing-box. fd — ParcelFileDescriptor.getFd() из Kotlin.
-func Start(fd int32, workDir string, socksAddr string) error {
+func Start(fd int32, workDir string, socksAddr string) (retErr error) {
+	alog(fmt.Sprintf("Start() ENTER fd=%d workDir=%s socksAddr=%s", fd, workDir, socksAddr))
+
+	defer func() {
+		if r := recover(); r != nil {
+			stack := string(debug.Stack())
+			msg := fmt.Sprintf("PANIC in Start: %v\n%s", r, stack)
+			alog(msg)
+			retErr = fmt.Errorf("panic: %v", r)
+		}
+	}()
+
 	mu.Lock()
 	defer mu.Unlock()
 
 	if service != nil {
+		alog("already running")
 		return fmt.Errorf("already running")
 	}
 
 	if workDir != "" {
-		_ = os.MkdirAll(workDir, 0o755)
-		_ = os.Chdir(workDir)
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			alog(fmt.Sprintf("MkdirAll failed: %v", err))
+		}
 	}
 
-	proxy := ""
-	if socksAddr != "" {
-		proxy = fmt.Sprintf(`{"type":"socks","tag":"proxy","server":"%s","server_port":1080,"version":"5"}`, "127.0.0.1")
-		_ = proxy
-	}
+	alog("building config")
 
-	finalOut := "direct"
+	var outbounds, finalOut string
 	if socksAddr != "" {
 		finalOut = "proxy"
-	}
-
-	outbounds := `[{"type":"direct","tag":"direct"}]`
-	if socksAddr != "" {
 		outbounds = `[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":1080,"version":"5"}]`
+	} else {
+		finalOut = "direct"
+		outbounds = `[{"type":"direct","tag":"direct"}]`
 	}
 
-	// Минимальный конфиг без fakeip и сложных DNS-правил
+	// workDir used for sing-box cache/state
+	cacheDir := ""
+	if workDir != "" {
+		cacheDir = workDir + "/sb-cache"
+		_ = os.MkdirAll(cacheDir, 0o755)
+	}
+
 	config := fmt.Sprintf(`{
-  "log": {"level": "debug"},
+  "log": {"level": "debug", "output": ""},
   "dns": {
-    "servers": [
-      {"tag":"cf","address":"8.8.8.8","detour":"%s"}
-    ]
+    "servers": [{"tag":"cf","address":"8.8.8.8","detour":"direct"}],
+    "final": "cf"
   },
   "inbounds": [{
     "type": "tun",
@@ -117,34 +131,46 @@ func Start(fd int32, workDir string, socksAddr string) error {
     "auto_detect_interface": false
   },
   "experimental": {
-    "cache_file": {"enabled": false}
+    "cache_file": {"enabled": %s, "path": "%s/cache.db"}
   }
-}`, finalOut, outbounds, finalOut)
+}`,
+		outbounds,
+		finalOut,
+		func() string {
+			if cacheDir != "" {
+				return "true"
+			}
+			return "false"
+		}(),
+		cacheDir,
+	)
 
-	alog(fmt.Sprintf("NewService fd=%d config=%s", fd, config))
+	alog(fmt.Sprintf("calling NewService fd=%d", fd))
 	s, err := libbox.NewService(config, &platform{tunFd: fd})
 	if err != nil {
 		alog(fmt.Sprintf("NewService error: %v", err))
 		return fmt.Errorf("NewService: %w", err)
 	}
-	alog("NewService OK")
+	alog("NewService OK, calling Start")
 
 	if err := s.Start(); err != nil {
 		alog(fmt.Sprintf("Start error: %v", err))
 		_ = s.Close()
 		return fmt.Errorf("Start: %w", err)
 	}
-	alog("Start OK — running")
+	alog("Start OK — VPN running")
 	service = s
 	return nil
 }
 
 // Stop останавливает sing-box.
 func Stop() {
+	alog("Stop() called")
 	mu.Lock()
 	defer mu.Unlock()
 	if service != nil {
 		_ = service.Close()
 		service = nil
+		alog("Stop() done")
 	}
 }
