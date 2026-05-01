@@ -98,23 +98,27 @@ class WhispVpnService : VpnService() {
             }
         }
 
-        // 2. Запускаем sing-box через gomobile AAR
+        // 2. Запускаем sing-box через gomobile AAR (на фоновом потоке — Start() может блокировать)
         val config = buildSingBoxConfig(
             socksAddr = if (goClientProc != null) "127.0.0.1" else null,
             socksPort = 1080
         )
+        val workDir = filesDir.absolutePath
+        Log.i(TAG, "sing-box workDir=$workDir config: $config")
 
-        try {
-            val workDir = filesDir.absolutePath
-            Log.i(TAG, "sing-box workDir=$workDir config: $config")
-            Singbox.start(pfd.fd.toLong(), workDir, config)
-            singBoxRunning = true
-            toast("VPN started")
-        } catch (t: Throwable) {
-            Log.e(TAG, "sing-box FATAL: ${t.stackTraceToString()}")
-            toast("sing-box: ${t.javaClass.simpleName}: ${t.message ?: t.toString()}")
-            stopVpn()
-        }
+        Thread({
+            try {
+                Log.i(TAG, "sing-box Start() calling...")
+                Singbox.start(pfd.fd.toLong(), workDir, config)
+                singBoxRunning = true
+                Log.i(TAG, "sing-box Start() returned OK — VPN running")
+                toast("VPN started")
+            } catch (t: Throwable) {
+                Log.e(TAG, "sing-box FATAL: ${t.stackTraceToString()}")
+                toast("sing-box: ${t.javaClass.simpleName}: ${t.message ?: t.toString()}")
+                stopVpn()
+            }
+        }, "singbox-start").start()
     }
 
     private fun buildSingBoxConfig(socksAddr: String?, socksPort: Int): String {
