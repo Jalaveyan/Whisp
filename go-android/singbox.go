@@ -91,6 +91,11 @@ func Start(fd int32, workDir string, socksAddr string) (retErr error) {
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
 			alog(fmt.Sprintf("MkdirAll failed: %v", err))
 		}
+		// Set CWD so sing-box's relative "cache.db" resolves to writable app dir.
+		// Safe here: called under mu.Lock before any sing-box goroutines start.
+		if err := os.Chdir(workDir); err != nil {
+			alog(fmt.Sprintf("Chdir failed: %v", err))
+		}
 	}
 
 	alog("building config")
