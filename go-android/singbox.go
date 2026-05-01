@@ -67,7 +67,7 @@ func (p *platform) ClearDNSCache()                                           {}
 func (p *platform) SendNotification(notification *libbox.Notification) error { return nil }
 
 // Start запускает sing-box. fd — ParcelFileDescriptor.getFd() из Kotlin.
-func Start(fd int32, workDir string, socksAddr string) (retErr error) {
+func Start(fd int32, workDir string, socksAddr string, connKey string) (retErr error) {
 	alog(fmt.Sprintf("Start() ENTER fd=%d workDir=%s socksAddr=%s", fd, workDir, socksAddr))
 
 	defer func() {
@@ -103,7 +103,7 @@ func Start(fd int32, workDir string, socksAddr string) (retErr error) {
 	var outbounds, finalOut string
 	if socksAddr != "" {
 		finalOut = "proxy"
-		outbounds = `[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":1080,"version":"5","username":"whisp","password":"whisp"}]`
+		outbounds = fmt.Sprintf(`[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":1080,"version":"5","username":"whisp","password":%q}]`, connKey)
 	} else {
 		finalOut = "direct"
 		outbounds = `[{"type":"direct","tag":"direct"}]`
