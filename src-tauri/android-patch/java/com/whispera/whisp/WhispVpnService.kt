@@ -12,7 +12,7 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.widget.Toast
-import singbox.Singbox
+import tun2socks.Tun2socks
 
 class WhispVpnService : VpnService() {
     companion object {
@@ -26,7 +26,6 @@ class WhispVpnService : VpnService() {
 
     private var tunInterface: ParcelFileDescriptor? = null
     private var goClientProc: Process? = null
-    private var singBoxRunning = false
     private var pendingConnKey: String = ""
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -80,7 +79,7 @@ class WhispVpnService : VpnService() {
         tunInterface = pfd
         toast("TUN fd=${pfd.fd}")
 
-        // 1. Запускаем go-client как SOCKS5 upstream на :1080
+        // Запускаем go-client как SOCKS5 upstream на :1080
         val libDir = applicationInfo.nativeLibraryDir
         val goClientPath = "$libDir/libwhispera-go-client.so"
         if (pendingConnKey.isNotEmpty() && java.io.File(goClientPath).exists()) {
@@ -91,88 +90,32 @@ class WhispVpnService : VpnService() {
                     "-no-tun")
                     .redirectErrorStream(true)
                     .start()
-                Thread.sleep(800) // дать go-client подняться
+                Thread.sleep(800)
                 toast("go-client started")
             } catch (t: Throwable) {
                 toast("go-client failed: ${t.message}")
             }
         }
 
-        // 2. Запускаем sing-box через gomobile AAR (на фоновом потоке — Start() может блокировать)
-        val config = buildSingBoxConfig(
-            socksAddr = if (goClientProc != null) "127.0.0.1" else null,
-            socksPort = 1080
-        )
-        val workDir = filesDir.absolutePath
-        Log.i(TAG, "sing-box workDir=$workDir config: $config")
-
+        // Запускаем tun2socks: TUN fd → SOCKS5 → go-client
+        val proxy = if (goClientProc != null) "socks5://127.0.0.1:1080" else "direct://"
         Thread({
             try {
-                Log.i(TAG, "sing-box Start() calling...")
-                Singbox.start(pfd.fd.toLong(), workDir, config)
-                singBoxRunning = true
-                Log.i(TAG, "sing-box Start() returned OK — VPN running")
+                Log.i(TAG, "tun2socks Start() fd=${pfd.fd} proxy=$proxy")
+                Tun2socks.start(pfd.fd, proxy)
+                Log.i(TAG, "tun2socks running")
                 toast("VPN started")
             } catch (t: Throwable) {
-                Log.e(TAG, "sing-box FATAL: ${t.stackTraceToString()}")
-                toast("sing-box: ${t.javaClass.simpleName}: ${t.message ?: t.toString()}")
+                Log.e(TAG, "tun2socks FATAL: ${t.stackTraceToString()}")
+                toast("tun2socks: ${t.javaClass.simpleName}: ${t.message ?: t.toString()}")
                 stopVpn()
             }
-        }, "singbox-start").start()
-    }
-
-    private fun buildSingBoxConfig(socksAddr: String?, socksPort: Int): String {
-        val outbounds = buildString {
-            append("""{"type":"direct","tag":"direct"}""")
-            if (socksAddr != null) {
-                append(""",{"type":"socks","tag":"proxy","server":"$socksAddr","server_port":$socksPort,"version":"5"}""")
-            }
-        }
-        val finalOut = if (socksAddr != null) "proxy" else "direct"
-
-        return """
-        {
-          "log": {"level": "debug"},
-          "dns": {
-            "servers": [
-              {"tag":"remote","address":"tls://1.1.1.1","detour":"$finalOut"},
-              {"tag":"local","address":"local","detour":"direct"}
-            ],
-            "rules": [{"outbound":"any","server":"local"}],
-            "fakeip": {
-              "enabled": true,
-              "inet4_range": "198.18.0.0/15"
-            },
-            "strategy": "prefer_ipv4"
-          },
-          "inbounds": [{
-            "type": "tun",
-            "tag": "tun-in",
-            "address": ["172.19.0.1/30"],
-            "mtu": 1500,
-            "auto_route": false,
-            "stack": "system"
-          }],
-          "outbounds": [$outbounds],
-          "route": {
-            "final": "$finalOut",
-            "auto_detect_interface": false
-          },
-          "experimental": {
-            "cache_file": {
-              "enabled": false
-            }
-          }
-        }
-        """.trimIndent()
+        }, "tun2socks-start").start()
     }
 
     private fun stopVpn() {
         Log.i(TAG, "stopVpn")
-        if (singBoxRunning) {
-            try { Singbox.stop() } catch (_: Throwable) {}
-            singBoxRunning = false
-        }
+        try { Tun2socks.stop() } catch (_: Throwable) {}
         goClientProc?.destroy()
         goClientProc = null
         try { tunInterface?.close() } catch (_: Throwable) {}
