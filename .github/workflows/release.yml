@@ -232,9 +232,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build tun2socks AAR via gomobile
+      - name: Build sing-box AAR via gomobile
         shell: bash
         env:
+          GONOSUMDB: "*"
           GOFLAGS: "-mod=mod"
         run: |
           export PATH="$PATH:$(go env GOPATH)/bin"
@@ -244,13 +245,20 @@ jobs:
           gomobile init
           mkdir -p src-tauri/gen/android/app/libs
           cd go-android
+          go mod download
+          SB_MOD="$(go env GOPATH)/pkg/mod/github.com/sagernet/sing-box@v1.10.7"
+          cp -r "$SB_MOD" ./sing-box-patched
+          chmod -R u+w ./sing-box-patched
+          python3 patch_singbox.py ./sing-box-patched
+          echo "" >> go.mod
+          echo "replace github.com/sagernet/sing-box v1.10.7 => ./sing-box-patched" >> go.mod
           export NDK_HOME="$ANDROID_NDK_HOME"
           gomobile bind \
             -target=android/arm64 \
             -androidapi=21 \
-            -o ../src-tauri/gen/android/app/libs/tun2socks.aar \
+            -o ../src-tauri/gen/android/app/libs/singbox.aar \
             .
-          ls -lh ../src-tauri/gen/android/app/libs/tun2socks.aar
+          ls -lh ../src-tauri/gen/android/app/libs/singbox.aar
 
       - name: Apply VpnService patch (Kotlin + manifest)
         run: bash src-tauri/android-patch/apply.sh
