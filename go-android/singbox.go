@@ -104,13 +104,6 @@ func Start(fd int32, workDir string, socksAddr string) (retErr error) {
 		outbounds = `[{"type":"direct","tag":"direct"}]`
 	}
 
-	// workDir used for sing-box cache/state
-	cacheDir := ""
-	if workDir != "" {
-		cacheDir = workDir + "/sb-cache"
-		_ = os.MkdirAll(cacheDir, 0o755)
-	}
-
 	config := fmt.Sprintf(`{
   "log": {"level": "debug", "output": ""},
   "dns": {
@@ -129,21 +122,8 @@ func Start(fd int32, workDir string, socksAddr string) (retErr error) {
   "route": {
     "final": "%s",
     "auto_detect_interface": false
-  },
-  "experimental": {
-    "cache_file": {"enabled": %s, "path": "%s/cache.db"}
   }
-}`,
-		outbounds,
-		finalOut,
-		func() string {
-			if cacheDir != "" {
-				return "true"
-			}
-			return "false"
-		}(),
-		cacheDir,
-	)
+}`, outbounds, finalOut)
 
 	alog(fmt.Sprintf("calling NewService fd=%d", fd))
 	s, err := libbox.NewService(config, &platform{tunFd: fd})
