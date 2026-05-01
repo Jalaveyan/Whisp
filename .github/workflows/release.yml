@@ -259,6 +259,7 @@ jobs:
           echo "" >> go.mod
           echo "replace github.com/sagernet/sing-box v1.10.7 => ./sing-box-patched" >> go.mod
 
+          export NDK_HOME="$ANDROID_NDK_HOME"
           gomobile bind \
             -target=android/arm64 \
             -androidapi=21 \
