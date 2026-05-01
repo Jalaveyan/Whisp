@@ -5,8 +5,11 @@ package singbox
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"runtime"
 	"sync"
+	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 )
@@ -64,14 +67,32 @@ func Start(fd int, workDir string, configJSON string) error {
 		_ = os.Chdir(workDir)
 	}
 
+	// watchdog: если через 15 сек не вышли — дампим goroutine stack в logcat
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			buf := make([]byte, 64*1024)
+			n := runtime.Stack(buf, true)
+			log.Printf("[singbox] WATCHDOG: Start() hung >15s, goroutines:\n%s", buf[:n])
+		}
+	}()
+	defer close(done)
+
+	log.Printf("[singbox] calling libbox.NewService fd=%d", fd)
 	s, err := libbox.NewService(configJSON, &platform{tunFd: int32(fd)})
 	if err != nil {
+		log.Printf("[singbox] NewService error: %v", err)
 		return fmt.Errorf("libbox.NewService: %w", err)
 	}
+	log.Printf("[singbox] NewService OK, calling s.Start()")
 	if err := s.Start(); err != nil {
+		log.Printf("[singbox] s.Start() error: %v", err)
 		_ = s.Close()
 		return fmt.Errorf("boxService.Start: %w", err)
 	}
+	log.Printf("[singbox] s.Start() OK — VPN running")
 	service = s
 	return nil
 }
