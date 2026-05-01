@@ -6,7 +6,6 @@ root = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path("./sing-
 patched = []
 
 def patch_file(p, *subs):
-    """Apply (pattern, repl) pairs to file, return True if changed."""
     try:
         c = p.read_text(encoding="utf-8", errors="replace")
     except Exception:
@@ -29,26 +28,62 @@ for p in root.rglob("*.go"):
          'if false { // chown skipped on Android'),
     )
 
-    # 2. cachefile: bbolt always fails in gomobile/Android.
-    #    New() returns *CacheFile (no error); db is set later in Start().
-    #    Make New() return nil — callers' nil-guards will skip all bbolt usage.
+    # 2. cachefile package: bbolt mmap fails in gomobile on Android.
+    #
+    #    Strategy: make New() return nil so the CacheFile is nil.
+    #    sing-box calls lifecycle methods (PreStart/Start/Close) and accessor
+    #    methods (LoadMode/StoreMode) directly on the CacheFile WITHOUT nil-
+    #    checking the receiver. We add early-return nil guards to every method
+    #    so nil-receiver calls become no-ops.
     try:
         c = p.read_text(encoding="utf-8", errors="replace")
     except Exception:
         continue
     if 'package cachefile' not in c:
         continue
+
+    changed = False
+
+    # 2a. Make New() always return nil (no CacheFile, no bbolt)
     n = re.sub(
         r'(func New\s*\([^)]*\)\s*\*CacheFile\s*\{)',
-        r'\1\n\treturn nil // Android: bbolt disabled in gomobile',
+        r'\1\n\treturn nil // Android: bbolt disabled',
         c,
         count=1,
     )
     if n != c:
-        p.write_text(n, encoding="utf-8")
+        c = n
+        changed = True
+        print(f"[patch] New()→nil in {p.relative_to(root)}")
+
+    # 2b. Nil guards for error-returning lifecycle/helper methods
+    for method in ('start', 'PreStart', 'Start', 'PostStart', 'Close', 'PostClose',
+                   'StoreMode', 'SaveMode'):
+        n = re.sub(
+            r'(func \(c \*CacheFile\) ' + method + r'\b[^{]*\{)',
+            r'\1\n\tif c == nil { return nil }',
+            c,
+        )
+        if n != c:
+            c = n
+            changed = True
+            print(f"[patch] {method}: nil guard in {p.relative_to(root)}")
+
+    # 2c. LoadMode returns string, not error
+    n = re.sub(
+        r'(func \(c \*CacheFile\) LoadMode\b[^{]*\{)',
+        r'\1\n\tif c == nil { return "" }',
+        c,
+    )
+    if n != c:
+        c = n
+        changed = True
+        print(f"[patch] LoadMode: nil guard in {p.relative_to(root)}")
+
+    if changed:
+        p.write_text(c, encoding="utf-8")
         if str(p.relative_to(root)) not in patched:
             patched.append(str(p.relative_to(root)))
-        print(f"[patch] cachefile.New() → nil in {p.relative_to(root)}")
 
 if patched:
     print("Patched files:")
