@@ -12,7 +12,7 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.widget.Toast
-import tun2socks.Tun2socks
+import singbox.Singbox
 
 class WhispVpnService : VpnService() {
     companion object {
@@ -97,25 +97,25 @@ class WhispVpnService : VpnService() {
             }
         }
 
-        // Запускаем tun2socks: TUN fd → SOCKS5 → go-client
-        val proxy = if (goClientProc != null) "socks5://127.0.0.1:1080" else "direct://"
+        // Запускаем sing-box: TUN fd → SOCKS5 → go-client
+        
         Thread({
             try {
-                Log.i(TAG, "tun2socks Start() fd=${pfd.fd} proxy=$proxy")
-                Tun2socks.start(pfd.fd, proxy)
-                Log.i(TAG, "tun2socks running")
+                Log.i(TAG, "singbox Start() fd=${pfd.fd}")
+                Singbox.start(pfd.fd, filesDir.absolutePath, if (goClientProc != null) "127.0.0.1:1080" else "")
+                Log.i(TAG, "singbox running")
                 toast("VPN started")
             } catch (t: Throwable) {
-                Log.e(TAG, "tun2socks FATAL: ${t.stackTraceToString()}")
-                toast("tun2socks: ${t.javaClass.simpleName}: ${t.message ?: t.toString()}")
+                Log.e(TAG, "singbox FATAL: ${t.stackTraceToString()}")
+                toast("singbox: ${t.javaClass.simpleName}: ${t.message ?: t.toString()}")
                 stopVpn()
             }
-        }, "tun2socks-start").start()
+        }, "singbox-start").start()
     }
 
     private fun stopVpn() {
         Log.i(TAG, "stopVpn")
-        try { Tun2socks.stop() } catch (_: Throwable) {}
+        try { Singbox.stop() } catch (_: Throwable) {}
         goClientProc?.destroy()
         goClientProc = null
         try { tunInterface?.close() } catch (_: Throwable) {}
