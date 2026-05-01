@@ -102,7 +102,7 @@ class WhispVpnService : VpnService() {
         Thread({
             try {
                 Log.i(TAG, "singbox Start() fd=${pfd.fd}")
-                Singbox.start(pfd.fd, filesDir.absolutePath, if (goClientProc != null) "127.0.0.1:1080" else "")
+                Singbox.start(pfd.fd, filesDir.absolutePath, if (goClientProc != null) "127.0.0.1:1080" else "", pendingConnKey)
                 Log.i(TAG, "singbox running")
                 toast("VPN started")
             } catch (t: Throwable) {
