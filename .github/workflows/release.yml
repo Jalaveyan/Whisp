@@ -254,36 +254,7 @@ jobs:
           SB_MOD="$(go env GOPATH)/pkg/mod/github.com/sagernet/sing-box@v1.10.7"
           cp -r "$SB_MOD" ./sing-box-patched
           chmod -R u+w ./sing-box-patched
-          python3 - <<'PY'
-import pathlib, re, sys
-
-root = pathlib.Path("./sing-box-patched")
-patched = []
-for p in root.rglob("*.go"):
-    c = p.read_text(encoding="utf-8", errors="replace")
-    # Убираем: return E.Cause(err, "platform chown")
-    n = re.sub(r'return\s+\w+\.Cause\(err,\s*"platform chown"\)',
-               'return nil // Android: chown not permitted, ignored', c)
-    # Запасной: if err = os.Chown(...); err != nil {  →  if false {
-    n = re.sub(r'(?:if\s+)?err\s*(?::)?=\s*os\.Chown\([^)]+\)\s*;\s*err\s*!=\s*nil\s*\{',
-               'if false { // chown skipped on Android', n)
-    if n != c:
-        p.write_text(n, encoding="utf-8")
-        patched.append(str(p.relative_to(root)))
-
-if patched:
-    print("Patched files:")
-    for f in patched: print(" ", f)
-else:
-    print("WARNING: 'platform chown' pattern not found — listing Chown occurrences:")
-    for p in root.rglob("*.go"):
-        c = p.read_text(errors="replace")
-        if "Chown" in c or "chown" in c:
-            for i, line in enumerate(c.splitlines(), 1):
-                if "Chown" in line or "chown" in line:
-                    print(f"  {p.relative_to(root)}:{i}: {line.strip()}")
-    sys.exit(1)
-PY
+          python3 patch_singbox.py ./sing-box-patched
           # Указываем go использовать пропатченную локальную копию
           echo "" >> go.mod
           echo "replace github.com/sagernet/sing-box v1.10.7 => ./sing-box-patched" >> go.mod
