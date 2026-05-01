@@ -103,7 +103,7 @@ func Start(fd int32, workDir string, socksAddr string) (retErr error) {
 	var outbounds, finalOut string
 	if socksAddr != "" {
 		finalOut = "proxy"
-		outbounds = `[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":1080,"version":"5"}]`
+		outbounds = `[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":1080,"version":"5","username":"whisp","password":"whisp"}]`
 	} else {
 		finalOut = "direct"
 		outbounds = `[{"type":"direct","tag":"direct"}]`
