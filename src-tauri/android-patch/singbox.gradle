@@ -1,0 +1,9 @@
+allprojects {
+    afterEvaluate { proj ->
+        if (proj.name == 'app') {
+            proj.dependencies {
+                implementation proj.fileTree(dir: "${proj.projectDir}/libs", include: ['*.aar'])
+            }
+        }
+    }
+}

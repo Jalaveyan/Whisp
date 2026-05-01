@@ -266,17 +266,7 @@ jobs:
       - name: Install Gradle init script for singbox.aar
         run: |
           mkdir -p ~/.gradle/init.d
-          cat > ~/.gradle/init.d/singbox.gradle << 'GROOVY'
-allprojects {
-    afterEvaluate { proj ->
-        if (proj.name == 'app') {
-            proj.dependencies {
-                implementation proj.fileTree(dir: "${proj.projectDir}/libs", include: ['*.aar'])
-            }
-        }
-    }
-}
-GROOVY
+          cp src-tauri/android-patch/singbox.gradle ~/.gradle/init.d/singbox.gradle
 
       - name: Build Tauri Android APK (debug, auto-signed)
         id: tauri_build
