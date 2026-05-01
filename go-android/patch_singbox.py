@@ -38,6 +38,10 @@ def type_zero(t):
         return 'false'
     if re.match(r'^u?int\d*$', t) or t in ('byte', 'rune', 'float32', 'float64', 'uintptr'):
         return '0'
+    # Known qualified types that are primitive aliases, not structs
+    PRIMITIVE_ALIASES = {'time.Duration', 'time.Weekday', 'time.Month'}
+    if t in PRIMITIVE_ALIASES:
+        return '0'
     # Qualified struct type (e.g. netip.Addr, netipx.IPSet)
     if re.match(r'^[A-Za-z]\w*\.[A-Za-z]\w*$', t):
         return t + '{}'
