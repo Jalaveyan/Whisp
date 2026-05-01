@@ -29,25 +29,43 @@ for p in root.rglob("*.go"):
          'if false { // chown skipped on Android'),
     )
 
-    # 2. cachefile.New: bbolt mmap fails on Android → always return nil (no cache)
-    #    sing-box is nil-safe for CacheFile when NeedCacheFile() is false.
+    # 2. cachefile: bbolt always fails in gomobile/Android — patch at source.
+    #    New() returns *CacheFile (no error); db is set later in Start().
+    #    Patch New() → nil so callers' nil-guards skip all bbolt usage.
+    #    Also guard LoadMode/SaveMode against nil db as defence-in-depth.
     try:
         c = p.read_text(encoding="utf-8", errors="replace")
     except Exception:
         continue
-    if 'package cachefile' in c and re.search(r'func New\b', c):
-        # Only patch New() that returns (*CacheFile, error) — not other New() variants
+    if 'package cachefile' not in c:
+        continue
+    changed = False
+    # 2a. func New(...) *CacheFile { → return nil immediately
+    n = re.sub(
+        r'(func New\s*\([^)]*\)\s*\*CacheFile\s*\{)',
+        r'\1\n\treturn nil // Android: bbolt disabled in gomobile',
+        c,
+        count=1,
+    )
+    if n != c:
+        changed = True
+        c = n
+        print(f"[patch] cachefile.New() → nil in {p.relative_to(root)}")
+    # 2b. guard any method that calls c.db.* — insert early nil-db return
+    for method in ('LoadMode', 'SaveMode', 'StoreMode'):
         n = re.sub(
-            r'(func New\s*\([^)]*\)[^{]*error[^{]*\{)',
-            r'\1\n\treturn nil, nil // Android: bbolt mmap not supported in gomobile',
+            r'(func \(c \*CacheFile\) ' + method + r'\b[^{]*\{)',
+            r'\1\n\tif c == nil || c.db == nil { return }\n',
             c,
-            count=1,
         )
         if n != c:
-            p.write_text(n, encoding="utf-8")
-            if str(p.relative_to(root)) not in patched:
-                patched.append(str(p.relative_to(root)))
-            print(f"[patch] disabled cachefile.New() in {p.relative_to(root)}")
+            changed = True
+            c = n
+            print(f"[patch] {method} nil-db guard in {p.relative_to(root)}")
+    if changed:
+        p.write_text(c, encoding="utf-8")
+        if str(p.relative_to(root)) not in patched:
+            patched.append(str(p.relative_to(root)))
 
 if patched:
     print("Patched files:")
