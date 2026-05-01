@@ -286,9 +286,11 @@ jobs:
         run: |
           if [ ! -f tauri-build.log ]; then echo "no build log"; exit 0; fi
           echo "##### grep .kt errors #####"
-          grep -nE '\.kt:[0-9]+|^e: |error:' tauri-build.log | head -120 || true
-          echo "##### tail 200 #####"
-          tail -200 tauri-build.log
+          grep -nE '\.kt:[0-9]+|^e: |error:|FAILURE:|> Task|Caused by:' tauri-build.log | head -200 || true
+          echo "##### head 100 #####"
+          head -100 tauri-build.log
+          echo "##### tail 300 #####"
+          tail -300 tauri-build.log
 
       - name: Fail if build failed
         if: steps.tauri_build.outputs.exit_code != '0'
