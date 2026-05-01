@@ -89,7 +89,7 @@ if "useLegacyPackaging" not in src:
     print("[android-patch] gradle: useLegacyPackaging=true added")
 
 # singbox.aar как fileTree dependency
-if "singbox.aar" not in src:
+if "fileTree" not in src:
     dep = '    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))\n'
     src = re.sub(r"(dependencies \{)", r"\1\n" + dep, src, count=1)
     print("[android-patch] gradle: singbox.aar dependency added")
