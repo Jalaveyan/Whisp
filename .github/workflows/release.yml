@@ -263,6 +263,21 @@ jobs:
       - name: Apply VpnService patch (Kotlin + manifest)
         run: bash src-tauri/android-patch/apply.sh
 
+      - name: Install Gradle init script for singbox.aar
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/singbox.gradle << 'GROOVY'
+allprojects {
+    afterEvaluate { proj ->
+        if (proj.name == 'app') {
+            proj.dependencies {
+                implementation proj.fileTree(dir: "${proj.projectDir}/libs", include: ['*.aar'])
+            }
+        }
+    }
+}
+GROOVY
+
       - name: Build Tauri Android APK (debug, auto-signed)
         id: tauri_build
         continue-on-error: true
