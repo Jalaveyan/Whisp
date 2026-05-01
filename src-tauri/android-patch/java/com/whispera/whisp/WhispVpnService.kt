@@ -105,11 +105,13 @@ class WhispVpnService : VpnService() {
         )
 
         try {
+            Log.i(TAG, "sing-box config: $config")
             Singbox.start(pfd.fd.toLong(), config)
             singBoxRunning = true
             toast("VPN started")
         } catch (t: Throwable) {
-            toast("sing-box: ${t.message}")
+            Log.e(TAG, "sing-box FATAL: ${t.stackTraceToString()}")
+            toast("sing-box: ${t.javaClass.simpleName}: ${t.message ?: t.toString()}")
             stopVpn()
         }
     }
@@ -125,14 +127,13 @@ class WhispVpnService : VpnService() {
 
         return """
         {
-          "log": {"level": "warn"},
+          "log": {"level": "debug"},
           "dns": {
             "servers": [
               {"tag":"remote","address":"tls://1.1.1.1","detour":"$finalOut"},
               {"tag":"local","address":"local","detour":"direct"}
             ],
             "rules": [{"outbound":"any","server":"local"}],
-            "independent_cache": true,
             "fakeip": {
               "enabled": true,
               "inet4_range": "198.18.0.0/15"
