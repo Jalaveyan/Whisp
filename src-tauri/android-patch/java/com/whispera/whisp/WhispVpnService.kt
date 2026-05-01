@@ -155,6 +155,11 @@ class WhispVpnService : VpnService() {
           "route": {
             "final": "$finalOut",
             "auto_detect_interface": false
+          },
+          "experimental": {
+            "cache_file": {
+              "enabled": false
+            }
           }
         }
         """.trimIndent()
