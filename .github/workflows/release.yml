@@ -281,16 +281,18 @@ jobs:
           path: tauri-build.log
           if-no-files-found: warn
 
-      - name: Show Kotlin errors
+      - name: Show build errors
         if: always()
         run: |
           if [ ! -f tauri-build.log ]; then echo "no build log"; exit 0; fi
-          echo "##### grep .kt errors #####"
-          grep -nE '\.kt:[0-9]+|^e: |error:|FAILURE:|> Task|Caused by:' tauri-build.log | head -200 || true
-          echo "##### head 100 #####"
-          head -100 tauri-build.log
-          echo "##### tail 300 #####"
-          tail -300 tauri-build.log
+          echo "##### FAILURE context (±20 lines) #####"
+          grep -n "FAILURE\|What went wrong\|Caused by\|Unresolved\|error:" tauri-build.log \
+            | awk -F: '{print $1}' | sort -nu | while read ln; do
+                sed -n "$((ln>20?ln-20:1)),$((ln+20))p" tauri-build.log
+                echo "---"
+              done | head -300
+          echo "##### tail 400 #####"
+          tail -400 tauri-build.log
 
       - name: Fail if build failed
         if: steps.tauri_build.outputs.exit_code != '0'
