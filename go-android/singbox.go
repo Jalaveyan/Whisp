@@ -16,24 +16,34 @@ var (
 )
 
 // platform реализует libbox.PlatformInterface.
-// Единственный значимый метод — OpenTun, остальные no-op.
 type platform struct{ tunFd int32 }
 
-func (p *platform) OpenTun(options *libbox.TunOptions) (int32, error) {
+func (p *platform) OpenTun(options libbox.TunOptions) (int32, error) {
 	return p.tunFd, nil
 }
 func (p *platform) AutoDetectInterfaceControl(fd int32) error { return nil }
 func (p *platform) UsePlatformAutoDetectInterfaceControl() bool { return false }
 func (p *platform) UsePlatformDefaultInterfaceMonitor() bool   { return false }
+func (p *platform) StartDefaultInterfaceMonitor(l libbox.InterfaceUpdateListener) error {
+	return nil
+}
+func (p *platform) CloseDefaultInterfaceMonitor(l libbox.InterfaceUpdateListener) error {
+	return nil
+}
 func (p *platform) FindConnectionOwner(ipProto int32, srcAddr string, srcPort int32, dstAddr string, dstPort int32) (int32, error) {
 	return 0, nil
 }
-func (p *platform) PackageNameByUid(uid int32) (string, error)  { return "", nil }
-func (p *platform) UIDByPackageName(pkg string) (int32, error)  { return 0, nil }
-func (p *platform) UsePlatformInterfaceGetter() bool            { return false }
-func (p *platform) Interfaces() ([]*libbox.NetworkInterface, error) { return nil, nil }
-func (p *platform) UnderNetworkExtension() bool                 { return false }
-func (p *platform) IncludeAllNetworks() bool                    { return false }
+func (p *platform) PackageNameByUid(uid int32) (string, error)              { return "", nil }
+func (p *platform) UIDByPackageName(pkg string) (int32, error)              { return 0, nil }
+func (p *platform) UsePlatformInterfaceGetter() bool                        { return false }
+func (p *platform) GetInterfaces() (libbox.NetworkInterfaceIterator, error) { return nil, nil }
+func (p *platform) UnderNetworkExtension() bool                             { return false }
+func (p *platform) IncludeAllNetworks() bool                                { return false }
+func (p *platform) WriteLog(message string)                                 {}
+func (p *platform) UseProcFS() bool                                         { return false }
+func (p *platform) ReadWIFIState() *libbox.WIFIState                        { return nil }
+func (p *platform) ClearDNSCache()                                          {}
+func (p *platform) SendNotification(notification *libbox.Notification) error { return nil }
 
 // Start запускает sing-box. fd — ParcelFileDescriptor.getFd() из Kotlin.
 // configJSON — стандартный sing-box JSON без поля fd в tun inbound.
@@ -65,5 +75,5 @@ func Stop() {
 	if service != nil {
 		_ = service.Close()
 		service = nil
- \                                                                                                                                                                                                                                                                                                                                  	}
+	}
 }
