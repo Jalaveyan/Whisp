@@ -66,7 +66,7 @@ class WhispVpnService : VpnService() {
         val pfd = try {
             Builder()
                 .setSession("Whisp VPN")
-                .setMtu(9000)
+                .setMtu(1500)
                 .addAddress("172.19.0.1", 30)
                 .addRoute("0.0.0.0", 0)
                 .addRoute("::", 0)
@@ -149,11 +149,9 @@ class WhispVpnService : VpnService() {
             "type": "tun",
             "tag": "tun-in",
             "address": ["172.19.0.1/30"],
-            "mtu": 9000,
+            "mtu": 1500,
             "auto_route": false,
-            "stack": "gvisor",
-            "sniff": true,
-            "sniff_override_destination": true
+            "stack": "system"
           }],
           "outbounds": [$outbounds],
           "route": {
