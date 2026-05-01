@@ -19,44 +19,58 @@ def patch_file(p, *subs):
         return True
     return False
 
+def type_zero(t):
+    """Return the Go zero-value literal for type string t."""
+    t = t.strip()
+    # named return: "name type" → take the type (last word)
+    parts = t.split()
+    if len(parts) > 1:
+        t = parts[-1]
+    if not t:
+        return 'nil'
+    if t in ('error',) or t.startswith('*') or t.startswith('[') \
+            or t.startswith('map') or t.startswith('chan') \
+            or t in ('interface{}', 'any'):
+        return 'nil'
+    if t == 'string':
+        return '""'
+    if t == 'bool':
+        return 'false'
+    if re.match(r'^u?int\d*$', t) or t in ('byte', 'rune', 'float32', 'float64', 'uintptr'):
+        return '0'
+    # Qualified struct type (e.g. netip.Addr, netipx.IPSet)
+    if re.match(r'^[A-Za-z]\w*\.[A-Za-z]\w*$', t):
+        return t + '{}'
+    return 'nil'
+
 def zero_return(sig):
-    """Return a valid Go 'return ...' for zero values inferred from method signature."""
-    # Extract the return part: everything after the last ')' before '{'
-    m = re.search(r'\)\s*(.*?)\s*\{', sig, re.DOTALL)
+    """
+    Given a matched *CacheFile method signature line
+      func (c *CacheFile) Name(params) ReturnType {
+    return the appropriate Go early-return statement.
+    """
+    # Extract return type: everything between closing-param-paren and opening brace.
+    # We match the SECOND pair of parens (params), not the receiver pair.
+    m = re.match(
+        r'func \(c \*CacheFile\) \w+\([^)]*\)\s*(.*?)\s*\{',
+        sig, re.DOTALL
+    )
     if not m:
         return 'return'
-    ret = m.group(1).strip().rstrip('{').strip()
+    ret = m.group(1).strip()
+
     if not ret:
-        return 'return'
-    if ret == 'error':
-        return 'return nil'
-    if ret == 'string':
-        return 'return ""'
-    if ret == 'bool':
-        return 'return false'
-    if re.match(r'^u?int\d*$', ret) or ret in ('byte', 'rune'):
-        return 'return 0'
-    if ret.startswith('('):
-        # Multiple return values: (Type1, Type2, ...)
-        inner = ret.strip('()').strip()
-        # Split by comma, but ignore commas inside brackets
-        parts = re.split(r',(?![^[]*])', inner)
-        zeros = []
-        for part in parts:
-            t = part.strip().split()[-1] if part.strip() else ''
-            if t == 'error' or t.startswith('*') or t.startswith('[') or t.startswith('map') or t.startswith('chan'):
-                zeros.append('nil')
-            elif t == 'string':
-                zeros.append('""')
-            elif t == 'bool':
-                zeros.append('false')
-            elif re.match(r'^u?int\d*$', t) or t in ('byte', 'rune'):
-                zeros.append('0')
-            else:
-                zeros.append('nil')
-        return 'return ' + ', '.join(zeros)
-    # Pointer, interface, or other reference type
-    return 'return nil'
+        return 'return'          # void
+
+    # Single return type
+    if not ret.startswith('('):
+        return 'return ' + type_zero(ret)
+
+    # Multiple return types: (T1, T2, ...)
+    inner = ret.strip('()').strip()
+    # Split by comma not inside brackets
+    parts = re.split(r',\s*', inner)
+    return 'return ' + ', '.join(type_zero(p) for p in parts)
 
 # ── Pass 1: chown ──────────────────────────────────────────────────────────
 for p in root.rglob("*.go"):
@@ -67,11 +81,7 @@ for p in root.rglob("*.go"):
          'if false { // chown skipped on Android'),
     )
 
-# ── Pass 2: cachefile — nil-safe all methods ───────────────────────────────
-#
-# bbolt mmap fails in gomobile on Android. Make New() return nil so no bbolt
-# is ever opened. sing-box calls CacheFile methods without nil-checking the
-# receiver, so we add early-return guards to EVERY method in the package.
+# ── Pass 2: cachefile — nil-safe all *CacheFile methods ───────────────────
 for p in root.rglob("*.go"):
     try:
         c = p.read_text(encoding="utf-8", errors="replace")
@@ -82,22 +92,22 @@ for p in root.rglob("*.go"):
 
     changed = False
 
-    # 2a. New() → nil (only the variant returning *CacheFile, not (*CacheFile,error))
+    # 2a. New() → nil  (variant returning *CacheFile only, no error)
     n = re.sub(
         r'(func New\s*\([^)]*\)\s*\*CacheFile\s*\{)',
         r'\1\n\treturn nil // Android: bbolt disabled',
-        c,
-        count=1,
+        c, count=1,
     )
     if n != c:
         c = n; changed = True
         print(f"[patch] New()→nil  {p.relative_to(root)}")
 
-    # 2b. nil guard on every (c *CacheFile) method in this file
+    # 2b. Nil guard on every (c *CacheFile) method in this file.
+    #     We insert `if c == nil { <zero-return> }` right after the opening brace.
     def add_guard(m):
         sig = m.group(0)
-        guard = zero_return(sig)
-        return sig + f'\n\tif c == nil {{ {guard} }}'
+        early = zero_return(sig)
+        return sig + f'\n\tif c == nil {{ {early} }}'
 
     n = re.sub(
         r'func \(c \*CacheFile\) \w+\([^)]*\)[^{]*\{',
@@ -114,7 +124,7 @@ for p in root.rglob("*.go"):
             patched.append(str(p.relative_to(root)))
 
 if patched:
-    print("Patched files:", *patched, sep="\n  ")
+    print("Patched:", *patched, sep="\n  ")
 else:
-    print("WARNING: no files were patched — check sing-box source layout")
+    print("WARNING: no files patched")
     sys.exit(1)
