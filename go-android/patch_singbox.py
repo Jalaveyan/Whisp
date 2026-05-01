@@ -36,8 +36,9 @@ for p in root.rglob("*.go"):
     except Exception:
         continue
     if 'package cachefile' in c and re.search(r'func New\b', c):
+        # Only patch New() that returns (*CacheFile, error) — not other New() variants
         n = re.sub(
-            r'(func New\s*\([^)]*\)[^{]*\{)',
+            r'(func New\s*\([^)]*\)[^{]*error[^{]*\{)',
             r'\1\n\treturn nil, nil // Android: bbolt mmap not supported in gomobile',
             c,
             count=1,
