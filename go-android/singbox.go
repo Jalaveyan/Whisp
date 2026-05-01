@@ -23,8 +23,10 @@ func (p *platform) OpenTun(options libbox.TunOptions) (int32, error) {
 	return p.tunFd, nil
 }
 func (p *platform) AutoDetectInterfaceControl(fd int32) error { return nil }
-func (p *platform) UsePlatformAutoDetectInterfaceControl() bool { return false }
-func (p *platform) UsePlatformDefaultInterfaceMonitor() bool   { return false }
+// Возвращаем true — sing-box будет звать наши no-op методы вместо
+// создания системных сокетов/мониторов, которые блокируются на Android.
+func (p *platform) UsePlatformAutoDetectInterfaceControl() bool { return true }
+func (p *platform) UsePlatformDefaultInterfaceMonitor() bool    { return true }
 func (p *platform) StartDefaultInterfaceMonitor(l libbox.InterfaceUpdateListener) error {
 	return nil
 }
@@ -36,7 +38,7 @@ func (p *platform) FindConnectionOwner(ipProto int32, srcAddr string, srcPort in
 }
 func (p *platform) PackageNameByUid(uid int32) (string, error)              { return "", nil }
 func (p *platform) UIDByPackageName(pkg string) (int32, error)              { return 0, nil }
-func (p *platform) UsePlatformInterfaceGetter() bool                        { return false }
+func (p *platform) UsePlatformInterfaceGetter() bool                        { return true }
 func (p *platform) GetInterfaces() (libbox.NetworkInterfaceIterator, error) { return nil, nil }
 func (p *platform) UnderNetworkExtension() bool                             { return false }
 func (p *platform) IncludeAllNetworks() bool                                { return false }
