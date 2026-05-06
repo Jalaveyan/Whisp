@@ -111,10 +111,6 @@ func Start(fd int32, workDir string, socksAddr string, connKey string) (retErr e
 
 	config := fmt.Sprintf(`{
   "log": {"level": "debug", "output": ""},
-  "dns": {
-    "servers": [{"tag":"cf","address":"8.8.8.8","detour":"direct"}],
-    "final": "cf"
-  },
   "inbounds": [{
     "type": "tun",
     "tag": "tun-in",
