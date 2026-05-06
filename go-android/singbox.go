@@ -1,5 +1,6 @@
 package singbox
 
+
 // #cgo LDFLAGS: -llog
 // #include <android/log.h>
 // #include <stdlib.h>
