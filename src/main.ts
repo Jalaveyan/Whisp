@@ -56,6 +56,11 @@ interface AppSettings {
   multi_bridges?: MultiBridgeEntry[];
   tls_fingerprint?: string;
   bypass_ru?: boolean;
+  socks_user?: string;
+  socks_pass?: string;
+  allow_lan?: boolean;
+  log_level?: string;
+  routing_mode?: string;
 }
 
 interface Profile { id: string; name: string; key: string; }
@@ -369,7 +374,16 @@ const i18n: Record<Lang, Record<string, string>> = {
     spoofIpsHint: "Список локальных IP для ротации источника. Пусто = отключено",
     ipSpoofing: "IP Spoofing",
     caCert: "CA сертификат",
-    downloadMitmCa: "Скачать whispera-ca.crt",
+    installMitmCa: "Установить CA",
+    allowLan: "Разрешить LAN",
+    allowLanHint: "Другие устройства в сети смогут использовать этот прокси",
+    logLevel: "Уровень логов",
+    routingMode: "Режим маршрутизации",
+    socksAuth: "SOCKS5 аутентификация",
+    socksUser: "Логин",
+    socksPass: "Пароль",
+    socksProxyUrl: "URL прокси",
+    socksSave: "Сохранить",
     bridgesTitle2: "Бриджи",
     bridgeRefreshTip: "Обновить",
     bridgePingAllTip: "Пинг всех",
@@ -628,7 +642,16 @@ const i18n: Record<Lang, Record<string, string>> = {
     spoofIpsHint: "Local IPs for source rotation. Empty = disabled",
     ipSpoofing: "IP Spoofing",
     caCert: "CA Certificate",
-    downloadMitmCa: "Download whispera-ca.crt",
+    installMitmCa: "Install CA",
+    allowLan: "Allow LAN",
+    allowLanHint: "Other devices on the network can use this proxy",
+    logLevel: "Log Level",
+    routingMode: "Routing Mode",
+    socksAuth: "SOCKS5 Authentication",
+    socksUser: "Username",
+    socksPass: "Password",
+    socksProxyUrl: "Proxy URL",
+    socksSave: "Save",
     bridgesTitle2: "Bridges",
     bridgeRefreshTip: "Refresh",
     bridgePingAllTip: "Ping all",
@@ -887,7 +910,16 @@ const i18n: Record<Lang, Record<string, string>> = {
     spoofIpsHint: "用于源轮换的本地IP列表。留空=禁用",
     ipSpoofing: "IP欺骗",
     caCert: "CA证书",
-    downloadMitmCa: "下载 whispera-ca.crt",
+    installMitmCa: "安装 CA",
+    allowLan: "允许 LAN",
+    allowLanHint: "局域网其他设备可使用此代理",
+    logLevel: "日志级别",
+    routingMode: "路由模式",
+    socksAuth: "SOCKS5 认证",
+    socksUser: "用户名",
+    socksPass: "密码",
+    socksProxyUrl: "代理 URL",
+    socksSave: "保存",
     bridgesTitle2: "桥接",
     bridgeRefreshTip: "刷新",
     bridgePingAllTip: "Ping全部",
@@ -1146,7 +1178,16 @@ const i18n: Record<Lang, Record<string, string>> = {
     spoofIpsHint: "لیست IP‌های محلی برای چرخش منبع. خالی = غیرفعال",
     ipSpoofing: "جعل IP",
     caCert: "گواهی CA",
-    downloadMitmCa: "دانلود whispera-ca.crt",
+    installMitmCa: "نصب CA",
+    allowLan: "اجازه LAN",
+    allowLanHint: "سایر دستگاه‌های شبکه می‌توانند از این پروکسی استفاده کنند",
+    logLevel: "سطح لاگ",
+    routingMode: "حالت مسیریابی",
+    socksAuth: "احراز هویت SOCKS5",
+    socksUser: "نام کاربری",
+    socksPass: "رمز عبور",
+    socksProxyUrl: "آدرس پروکسی",
+    socksSave: "ذخیره",
     bridgesTitle2: "پل‌ها",
     bridgeRefreshTip: "بروزرسانی",
     bridgePingAllTip: "پینگ همه",
@@ -3680,6 +3721,14 @@ function renderSettings(): string {
         </div>
         <div class="setting-value"><label class="toggle"><input type="checkbox" id="set-bypass-ru" ${settings.bypass_ru !== false ? "checked" : ""}/><span class="toggle-slider"></span></label></div>
       </div>
+      <div class="setting-row" style="align-items:center">
+        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+          <span class="setting-label">${t("mitmInspection")}</span>
+          <span style="font-size:11px;opacity:.5;font-weight:400">${t("mitmDesc")}</span>
+        </div>
+        <div class="setting-value"><label class="toggle"><input type="checkbox" id="set-mitm" ${settings.mitm_enabled ? "checked" : ""}/><span class="toggle-slider"></span></label></div>
+      </div>
+      ${settings.mitm_enabled ? `<div class="setting-row"><span class="setting-label">${t("caCert")}</span><div class="setting-value"><button class="btn-sm" id="btn-install-mitm-ca">${t("installMitmCa")}</button></div></div>` : ''}
       <div class="setting-row"><span class="setting-label">${t("theme")}</span><div class="setting-value"><div class="pill-group">
         <button class="pill-btn ${settings.theme === "dark" ? "active" : ""}" data-theme="dark">${t("dark")}</button>
         <button class="pill-btn ${settings.theme === "auto" ? "active" : ""}" data-theme="auto">${t("auto")}</button>
@@ -3700,6 +3749,24 @@ function renderSettings(): string {
       <div class="settings-section-title">${t("mihomo")}</div>
       <div class="setting-row"><span class="setting-label">${t("mixedPort")}</span><div class="setting-value"><input type="number" id="set-port" value="${settings.mihomo_port}"/><span class="edit-icon">✎</span></div></div>
       <div class="setting-row"><span class="setting-label">${t("bindAddr")}</span><div class="setting-value"><input type="text" id="set-bind" value="${settings.socks_addr}"/><span class="edit-icon">✎</span></div></div>
+      <div class="setting-row" style="align-items:flex-start">
+        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+          <span class="setting-label">${t("allowLan")}</span>
+          <span style="font-size:11px;opacity:.5;font-weight:400">${t("allowLanHint")}</span>
+        </div>
+        <div class="setting-value"><label class="toggle"><input type="checkbox" id="set-allow-lan" ${settings.allow_lan ? "checked" : ""}/><span class="toggle-slider"></span></label></div>
+      </div>
+      <div class="setting-row"><span class="setting-label">${t("routingMode")}</span><div class="setting-value"><div class="pill-group">
+        <button class="pill-btn ${!settings.routing_mode || settings.routing_mode === "rule" ? "active" : ""}" data-rmode="rule">Rule</button>
+        <button class="pill-btn ${settings.routing_mode === "global" ? "active" : ""}" data-rmode="global">Global</button>
+        <button class="pill-btn ${settings.routing_mode === "direct" ? "active" : ""}" data-rmode="direct">Direct</button>
+      </div></div></div>
+      <div class="setting-row"><span class="setting-label">${t("logLevel")}</span><div class="setting-value"><div class="pill-group">
+        <button class="pill-btn ${!settings.log_level || settings.log_level === "info" ? "active" : ""}" data-loglevel="info">Info</button>
+        <button class="pill-btn ${settings.log_level === "debug" ? "active" : ""}" data-loglevel="debug">Debug</button>
+        <button class="pill-btn ${settings.log_level === "warning" ? "active" : ""}" data-loglevel="warning">Warning</button>
+        <button class="pill-btn ${settings.log_level === "silent" ? "active" : ""}" data-loglevel="silent">Silent</button>
+      </div></div></div>
       <div class="setting-row"><span class="setting-label">${t("tunStack")}</span><div class="setting-value"><div class="pill-group">
         <button class="pill-btn ${settings.tun_stack === "Mixed" ? "active" : ""}" data-tun="Mixed">Mixed</button>
         <button class="pill-btn ${settings.tun_stack === "gVisor" ? "active" : ""}" data-tun="gVisor">gVisor</button>
@@ -3728,6 +3795,18 @@ function renderSettings(): string {
         <div class="setting-value"><label class="toggle"><input type="checkbox" id="set-bypass-ru" ${settings.bypass_ru !== false ? "checked" : ""}/><span class="toggle-slider"></span></label></div>
       </div>
       <div class="setting-row"><span class="setting-label">${t("secretLabel")}</span><div class="setting-value"><span class="secret-value">${settings.secret}</span><button class="btn-sm" id="btn-copy-secret">${t("copy")}</button></div></div>
+      <div class="setting-row" style="align-items:flex-start">
+        <span class="setting-label">${t("socksAuth")}</span>
+        <div class="setting-value" style="flex-direction:column;align-items:stretch;gap:6px">
+          <input type="text" id="set-socks-user" value="${esc(settings.socks_user || '')}" placeholder="${t("socksUser")}" autocomplete="off" style="width:100%;box-sizing:border-box"/>
+          <div style="display:flex;gap:4px;align-items:center">
+            <input type="password" id="set-socks-pass" value="${esc(settings.socks_pass || '')}" placeholder="${t("socksPass")}" autocomplete="new-password" style="flex:1;box-sizing:border-box"/>
+            <button class="btn-sm" id="btn-toggle-socks-pass" style="flex-shrink:0">👁</button>
+          </div>
+          ${(settings.socks_user || settings.socks_pass) ? `<div style="font-size:11px;opacity:.5;word-break:break-all;display:flex;align-items:center;gap:4px"><span id="socks-proxy-url">socks5://${esc(settings.socks_user||'')}:${esc(settings.socks_pass||'')}@127.0.0.1:${settings.mihomo_port}</span><button class="btn-sm" id="btn-copy-socks-url" style="flex-shrink:0">${t("copy")}</button></div>` : ''}
+          <button class="btn-sm" id="btn-save-socks-auth" style="align-self:flex-end">${t("socksSave")}</button>
+        </div>
+      </div>
     </div>
     <div class="settings-section">
       <div class="settings-section-title">${t("advanced")}</div>
@@ -3742,7 +3821,7 @@ function renderSettings(): string {
         <input type="text" id="set-spoof-ips" value="${esc(settings.spoof_ips || '')}" placeholder="192.168.1.10, 192.168.1.11" style="width:100%;box-sizing:border-box"/>
         <span style="font-size:11px;opacity:.5">${t("spoofIpsHint")}</span>
       </div></div>
-      ${settings.mitm_enabled ? `<div class="setting-row"><span class="setting-label">${t("caCert")}</span><div class="setting-value"><button class="btn-sm" id="btn-download-mitm-ca">${t("downloadMitmCa")}</button></div></div>` : ''}
+      ${settings.mitm_enabled ? `<div class="setting-row"><span class="setting-label">${t("caCert")}</span><div class="setting-value"><button class="btn-sm" id="btn-install-mitm-ca">${t("installMitmCa")}</button></div></div>` : ''}
     </div>
     <div class="settings-section">
       <div class="settings-section-header"><span class="settings-section-title">${t("whisp")}</span><span class="settings-link">${t("installed")}</span></div>
@@ -3764,6 +3843,8 @@ function bindSettingsEvents(): void {
     persistSettings();
   });
   document.querySelectorAll<HTMLElement>(".pill-btn[data-tun]").forEach(el => el.addEventListener("click", () => { settings.tun_stack = el.dataset.tun || "Mixed"; persistSettings(); renderPage(); }));
+  document.querySelectorAll<HTMLElement>(".pill-btn[data-rmode]").forEach(el => el.addEventListener("click", () => { settings.routing_mode = el.dataset.rmode || "rule"; persistSettings(); renderPage(); }));
+  document.querySelectorAll<HTMLElement>(".pill-btn[data-loglevel]").forEach(el => el.addEventListener("click", () => { settings.log_level = el.dataset.loglevel || "info"; persistSettings(); renderPage(); }));
   document.querySelectorAll<HTMLElement>(".pill-btn[data-theme]").forEach(el => el.addEventListener("click", () => { settings.theme = el.dataset.theme || "dark"; persistSettings(); renderPage(); }));
   document.querySelectorAll<HTMLElement>(".pill-btn[data-vpndns]").forEach(el => el.addEventListener("click", () => {
     const val = el.dataset.vpndns || "1.1.1.1:53";
@@ -3777,9 +3858,26 @@ function bindSettingsEvents(): void {
     settings.vpn_dns = this.value.trim();
     persistSettings();
   });
-  document.getElementById("btn-download-mitm-ca")?.addEventListener("click", () => {
-    // MITM CA is served by the local go-client control API, not the remote server
-    invoke("open_url", { url: "http://127.0.0.1:10801/mitm/ca" }).catch(() => { });
+  document.getElementById("btn-install-mitm-ca")?.addEventListener("click", () => {
+    invoke("install_mitm_ca")
+      .then(() => showToast(t("caCert") + " OK", "success", 3000))
+      .catch((e: unknown) => showToast(String(e), "error", 5000));
+  });
+  document.getElementById("btn-toggle-socks-pass")?.addEventListener("click", () => {
+    const inp = document.getElementById("set-socks-pass") as HTMLInputElement | null;
+    if (inp) inp.type = inp.type === "password" ? "text" : "password";
+  });
+  document.getElementById("btn-save-socks-auth")?.addEventListener("click", () => {
+    const user = (document.getElementById("set-socks-user") as HTMLInputElement | null)?.value.trim() ?? "";
+    const pass = (document.getElementById("set-socks-pass") as HTMLInputElement | null)?.value ?? "";
+    settings.socks_user = user;
+    settings.socks_pass = pass;
+    persistSettings();
+    renderPage();
+  });
+  document.getElementById("btn-copy-socks-url")?.addEventListener("click", () => {
+    const url = (document.getElementById("socks-proxy-url") as HTMLElement | null)?.textContent ?? "";
+    clipboardWrite(url);
   });
 
   (document.getElementById("set-mitm") as HTMLInputElement)?.addEventListener("change", function () {
@@ -3793,7 +3891,7 @@ function bindSettingsEvents(): void {
     persistSettings();
     if (isConnected) showToast(t("reconnectToApply"), "info", 3000);
   });
-  const toggles: [string, keyof AppSettings][] = [["set-dns", "dns_redirect"], ["set-ipv6", "ipv6"], ["set-hwid", "hwid"], ["set-autostart", "auto_connect"], ["set-authtip", "auth_tip"], ["set-bypass-ru", "bypass_ru"]];
+  const toggles: [string, keyof AppSettings][] = [["set-dns", "dns_redirect"], ["set-ipv6", "ipv6"], ["set-hwid", "hwid"], ["set-autostart", "auto_connect"], ["set-authtip", "auth_tip"], ["set-bypass-ru", "bypass_ru"], ["set-allow-lan", "allow_lan"]];
   toggles.forEach(([id, key]) => { (document.getElementById(id) as HTMLInputElement)?.addEventListener("change", function () { (settings as any)[key] = this.checked; persistSettings(); }); });
   document.getElementById("btn-copy-secret")?.addEventListener("click", () => {
     clipboardWrite(settings.secret);

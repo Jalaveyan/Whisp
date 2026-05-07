@@ -365,6 +365,11 @@ pub struct MihomoConfig<'a> {
     pub custom_dns: &'a [String],
     pub tls_fingerprint: &'a str,
     pub bypass_ru: bool,
+    pub socks_user: &'a str,
+    pub socks_pass: &'a str,
+    pub allow_lan: bool,
+    pub log_level: &'a str,
+    pub routing_mode: &'a str,
 }
 
 fn map_fingerprint(fp: &str) -> &str {
@@ -495,12 +500,23 @@ pub fn generate_config(cfg: &MihomoConfig) -> String {
         ""
     };
 
+    let auth_block = if !cfg.socks_user.is_empty() && !cfg.socks_pass.is_empty() {
+        format!("authentication:\n  - \"{}:{}\"\n", cfg.socks_user, cfg.socks_pass)
+    } else {
+        String::new()
+    };
+
+    let allow_lan = cfg.allow_lan;
+    let log_level = match cfg.log_level { "debug" | "warning" | "error" | "silent" => cfg.log_level, _ => "info" };
+    let routing_mode = match cfg.routing_mode { "global" | "direct" => cfg.routing_mode, _ => "rule" };
+
     format!(
         r#"mixed-port: {port}
-allow-lan: false
+allow-lan: {allow_lan}
+{auth_block}
 ipv6: {ipv6}
-mode: rule
-{fp_line}log-level: info
+mode: {routing_mode}
+{fp_line}log-level: {log_level}
 external-controller: 127.0.0.1:9090
 find-process-mode: strict
 

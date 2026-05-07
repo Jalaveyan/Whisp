@@ -168,6 +168,16 @@ struct AppSettings {
     tls_fingerprint: String,
     #[serde(default = "default_true")]
     bypass_ru: bool,
+    #[serde(default)]
+    socks_user: String,
+    #[serde(default)]
+    socks_pass: String,
+    #[serde(default)]
+    allow_lan: bool,
+    #[serde(default)]
+    log_level: String,
+    #[serde(default)]
+    routing_mode: String,
 }
 
 fn default_true() -> bool {
@@ -207,6 +217,11 @@ impl Default for AppSettings {
             multi_bridges: Vec::new(),
             tls_fingerprint: String::new(),
             bypass_ru: true,
+            socks_user: String::new(),
+            socks_pass: String::new(),
+            allow_lan: false,
+            log_level: String::new(),
+            routing_mode: String::new(),
         }
     }
 }
@@ -513,6 +528,11 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
         custom_dns: &settings.custom_dns,
         tls_fingerprint: &settings.tls_fingerprint,
         bypass_ru: settings.bypass_ru,
+        socks_user: &settings.socks_user,
+        socks_pass: &settings.socks_pass,
+        allow_lan: settings.allow_lan,
+        log_level: &settings.log_level,
+        routing_mode: &settings.routing_mode,
     });
     fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
 
@@ -645,6 +665,11 @@ async fn connect_ml(
         custom_dns: &settings.custom_dns,
         tls_fingerprint: &settings.tls_fingerprint,
         bypass_ru: settings.bypass_ru,
+        socks_user: &settings.socks_user,
+        socks_pass: &settings.socks_pass,
+        allow_lan: settings.allow_lan,
+        log_level: &settings.log_level,
+        routing_mode: &settings.routing_mode,
     });
     fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
     let mut mgr = state.mihomo.lock().map_err(|e| e.to_string())?;
@@ -1364,6 +1389,59 @@ fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn install_mitm_ca() -> Result<(), String> {
+    // Fetch CA cert from local go-client control API
+    let ca_bytes = reqwest::Client::new()
+        .get("http://127.0.0.1:10801/mitm/ca")
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("CA fetch failed: {}", e))?
+        .bytes()
+        .await
+        .map_err(|e| format!("CA read failed: {}", e))?;
+
+    #[cfg(target_os = "android")]
+    {
+        return whisp_vpn_android::service_intent::install_ca_cert_android(&ca_bytes);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let tmp_path = std::env::temp_dir().join("whispera-ca.crt");
+        fs::write(&tmp_path, &ca_bytes).map_err(|e| format!("write temp: {}", e))?;
+        let status = std::process::Command::new("certutil")
+            .args(["-addstore", "-user", "Root", &tmp_path.to_string_lossy()])
+            .status()
+            .map_err(|e| format!("certutil: {}", e))?;
+        let _ = fs::remove_file(&tmp_path);
+        if !status.success() {
+            return Err(format!("certutil exit code {}", status.code().unwrap_or(-1)));
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let tmp_path = std::env::temp_dir().join("whispera-ca.crt");
+        fs::write(&tmp_path, &ca_bytes).map_err(|e| format!("write temp: {}", e))?;
+        let status = std::process::Command::new("security")
+            .args(["add-trusted-cert", "-d", "-r", "trustRoot", "-k",
+                   "/Library/Keychains/System.keychain", &tmp_path.to_string_lossy()])
+            .status()
+            .map_err(|e| format!("security: {}", e))?;
+        let _ = fs::remove_file(&tmp_path);
+        if !status.success() {
+            return Err(format!("security exit code {}", status.code().unwrap_or(-1)));
+        }
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("CA install not supported on this platform".into())
+}
+
+#[tauri::command]
 fn get_ml_transport(app: tauri::AppHandle) -> Result<String, String> {
     Ok(get_app_settings(app)?.ml_transport)
 }
@@ -1414,6 +1492,11 @@ async fn save_routing_rules(app: tauri::AppHandle, rules: Vec<RoutingRule>) -> R
         custom_dns: &settings.custom_dns,
         tls_fingerprint: &settings.tls_fingerprint,
         bypass_ru: settings.bypass_ru,
+        socks_user: &settings.socks_user,
+        socks_pass: &settings.socks_pass,
+        allow_lan: settings.allow_lan,
+        log_level: &settings.log_level,
+        routing_mode: &settings.routing_mode,
     });
     fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
 
@@ -1464,6 +1547,11 @@ async fn apply_tls_fingerprint(app: tauri::AppHandle) -> Result<(), String> {
         custom_dns: &settings.custom_dns,
         tls_fingerprint: &settings.tls_fingerprint,
         bypass_ru: settings.bypass_ru,
+        socks_user: &settings.socks_user,
+        socks_pass: &settings.socks_pass,
+        allow_lan: settings.allow_lan,
+        log_level: &settings.log_level,
+        routing_mode: &settings.routing_mode,
     });
     fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
 
@@ -1525,6 +1613,11 @@ async fn save_blocklist(app: tauri::AppHandle, rules: Vec<RoutingRule>) -> Resul
         custom_dns: &settings.custom_dns,
         tls_fingerprint: &settings.tls_fingerprint,
         bypass_ru: settings.bypass_ru,
+        socks_user: &settings.socks_user,
+        socks_pass: &settings.socks_pass,
+        allow_lan: settings.allow_lan,
+        log_level: &settings.log_level,
+        routing_mode: &settings.routing_mode,
     });
     fs::write(&config_path, &mihomo_config).map_err(|e| e.to_string())?;
 
@@ -1558,7 +1651,12 @@ fn install_services(
             extra_socks_addrs: &[],
             custom_dns: &settings.custom_dns,
             tls_fingerprint: &settings.tls_fingerprint,
-        bypass_ru: settings.bypass_ru,
+            bypass_ru: settings.bypass_ru,
+            socks_user: &settings.socks_user,
+            socks_pass: &settings.socks_pass,
+            allow_lan: settings.allow_lan,
+            log_level: &settings.log_level,
+            routing_mode: &settings.routing_mode,
         });
         fs::write(&config_path, &stub).ok();
     }
@@ -2350,6 +2448,7 @@ pub fn run() {
             get_system_info,
             open_config_dir,
             open_url,
+            install_mitm_ca,
             install_services,
             uninstall_services,
             get_routing_rules,
