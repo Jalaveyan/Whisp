@@ -3,3 +3,5 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 *.pdb
+go-android/patch
+go-android/sing-box-patched/
