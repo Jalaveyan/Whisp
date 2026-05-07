@@ -2336,9 +2336,14 @@ function bindNodeGraphEvents(): void {
 
   document.querySelectorAll<HTMLSelectElement>(".conn-transport-inline").forEach(sel => {
     sel.addEventListener("change", async () => {
-      await invoke("switch_transport", { id: sel.dataset.id!, transport: sel.value }).catch(() => {});
-      showToast(`${t("transportSet")} ${sel.value}`, "success", 2000);
-      setTimeout(async () => { await fetchConnections(); renderPage(); }, 1500);
+      try {
+        await invoke("switch_transport", { id: sel.dataset.id!, transport: sel.value });
+        showToast(`${t("transportSet")} ${sel.value}`, "success", 2000);
+        setTimeout(async () => { await fetchConnections(); renderPage(); }, 1500);
+      } catch {
+        showToast(t("error") || "Transport switch failed", "error", 2500);
+        await fetchConnections(); renderPage();
+      }
     });
   });
 
@@ -2849,9 +2854,14 @@ function bindConnectionsEvents(): void {
       const id = sel.dataset.id!;
       const btn = sel.closest(".conn-entry")?.querySelector<HTMLButtonElement>(".conn-transport-apply");
       if (btn) btn.textContent = "…";
-      await invoke("switch_transport", { id, transport: sel.value }).catch(() => {});
-      showToast(`${t("transportSet")} ${sel.value}`, "success", 2000);
-      setTimeout(async () => { await fetchConnections(); renderPage(); }, 1500);
+      try {
+        await invoke("switch_transport", { id, transport: sel.value });
+        showToast(`${t("transportSet")} ${sel.value}`, "success", 2000);
+        setTimeout(async () => { await fetchConnections(); renderPage(); }, 1500);
+      } catch {
+        showToast(t("error") || "Transport switch failed", "error", 2500);
+        await fetchConnections(); renderPage();
+      }
     });
   });
 
