@@ -19,7 +19,8 @@ class WhispVpnService : VpnService() {
         const val TAG = "WhispVpnService"
         const val ACTION_START = "com.whispera.whisp.ACTION_VPN_START"
         const val ACTION_STOP  = "com.whispera.whisp.ACTION_VPN_STOP"
-        const val EXTRA_CONN_KEY = "com.whispera.whisp.EXTRA_CONN_KEY"
+        const val EXTRA_CONN_KEY  = "com.whispera.whisp.EXTRA_CONN_KEY"
+        const val EXTRA_RULES_JSON = "com.whispera.whisp.EXTRA_RULES_JSON"
         const val NOTIFICATION_ID = 17
         const val CHANNEL_ID = "whisp_vpn_channel"
     }
@@ -27,6 +28,7 @@ class WhispVpnService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
     private var goClientProc: Process? = null
     private var pendingConnKey: String = ""
+    private var pendingRulesJson: String = ""
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private fun toast(msg: String) {
@@ -39,7 +41,8 @@ class WhispVpnService : VpnService() {
             when (intent?.action) {
                 ACTION_STOP -> { stopVpn(); return START_NOT_STICKY }
                 else -> {
-                    pendingConnKey = intent?.getStringExtra(EXTRA_CONN_KEY) ?: ""
+                    pendingConnKey  = intent?.getStringExtra(EXTRA_CONN_KEY)  ?: ""
+                    pendingRulesJson = intent?.getStringExtra(EXTRA_RULES_JSON) ?: ""
                     startVpnSafe()
                 }
             }
@@ -102,7 +105,7 @@ class WhispVpnService : VpnService() {
         Thread({
             try {
                 Log.i(TAG, "singbox Start() fd=${pfd.fd}")
-                Singbox.start(pfd.fd, filesDir.absolutePath, if (goClientProc != null) "127.0.0.1:1080" else "", pendingConnKey)
+                Singbox.start(pfd.fd, filesDir.absolutePath, if (goClientProc != null) "127.0.0.1:1080" else "", pendingConnKey, pendingRulesJson)
                 Log.i(TAG, "singbox running")
                 toast("VPN started")
             } catch (t: Throwable) {

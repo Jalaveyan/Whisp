@@ -12,6 +12,7 @@ import "C"
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -22,6 +23,96 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 )
+
+type inputRule struct {
+	Kind    string `json:"kind"`
+	Suffix  string `json:"suffix,omitempty"`
+	Keyword string `json:"keyword,omitempty"`
+	Domain  string `json:"domain,omitempty"`
+	CIDR    string `json:"cidr,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Action  string `json:"action"`
+}
+
+type sbRouteRule struct {
+	DomainSuffix  []string `json:"domain_suffix,omitempty"`
+	DomainKeyword []string `json:"domain_keyword,omitempty"`
+	Domain        []string `json:"domain,omitempty"`
+	IPCIDR        []string `json:"ip_cidr,omitempty"`
+	Outbound      string   `json:"outbound"`
+}
+
+func buildSingboxRoutes(rulesJson string) (routesJSON string, needSniff bool, needBlock bool) {
+	if rulesJson == "" {
+		return "", false, false
+	}
+	var rules []inputRule
+	if err := json.Unmarshal([]byte(rulesJson), &rules); err != nil || len(rules) == 0 {
+		return "", false, false
+	}
+
+	byOutbound := map[string]*sbRouteRule{}
+	actionToOutbound := func(action string) string {
+		switch action {
+		case "DIRECT":
+			return "direct"
+		case "REJECT", "BLOCK":
+			return "block"
+		default:
+			return "proxy"
+		}
+	}
+
+	for _, r := range rules {
+		out := actionToOutbound(r.Action)
+		if _, exists := byOutbound[out]; !exists {
+			byOutbound[out] = &sbRouteRule{Outbound: out}
+		}
+		entry := byOutbound[out]
+		switch r.Kind {
+		case "domain-suffix":
+			if r.Suffix != "" {
+				entry.DomainSuffix = append(entry.DomainSuffix, r.Suffix)
+				needSniff = true
+			}
+		case "domain-keyword":
+			if r.Keyword != "" {
+				entry.DomainKeyword = append(entry.DomainKeyword, r.Keyword)
+				needSniff = true
+			}
+		case "domain-exact":
+			if r.Domain != "" {
+				entry.Domain = append(entry.Domain, r.Domain)
+				needSniff = true
+			}
+		case "ip-cidr":
+			if r.CIDR != "" {
+				entry.IPCIDR = append(entry.IPCIDR, r.CIDR)
+			}
+		// "process-name" skipped — not supported in Android TUN routing
+		}
+	}
+
+	if _, ok := byOutbound["block"]; ok {
+		needBlock = true
+	}
+
+	var sbRules []sbRouteRule
+	for _, out := range []string{"block", "direct", "proxy"} {
+		if r, ok := byOutbound[out]; ok {
+			sbRules = append(sbRules, *r)
+		}
+	}
+	if len(sbRules) == 0 {
+		return "", false, false
+	}
+
+	b, err := json.Marshal(sbRules)
+	if err != nil {
+		return "", false, false
+	}
+	return string(b), needSniff, needBlock
+}
 
 func alog(msg string) {
 	cs := C.CString(msg)
@@ -72,7 +163,7 @@ func (p *platform) ClearDNSCache()                                           {}
 func (p *platform) SendNotification(notification *libbox.Notification) error { return nil }
 
 // Start запускает sing-box. fd — ParcelFileDescriptor.getFd() из Kotlin.
-func Start(fd int32, workDir string, socksAddr string, connKey string) (retErr error) {
+func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson string) (retErr error) {
 	alog(fmt.Sprintf("Start() ENTER fd=%d workDir=%s socksAddr=%s", fd, workDir, socksAddr))
 
 	defer func() {
@@ -105,6 +196,8 @@ func Start(fd int32, workDir string, socksAddr string, connKey string) (retErr e
 
 	alog("building config")
 
+	routesJSON, needSniff, needBlock := buildSingboxRoutes(rulesJson)
+
 	var outbounds, finalOut string
 	if socksAddr != "" {
 		finalOut = "proxy"
@@ -115,10 +208,29 @@ func Start(fd int32, workDir string, socksAddr string, connKey string) (retErr e
 		}
 		h := sha256.Sum256([]byte(connKey))
 		pass := hex.EncodeToString(h[:])
-		outbounds = fmt.Sprintf(`[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":%q,"server_port":%d,"version":"5","username":"whisp","password":%q}]`, host, port, pass)
+		outbounds = fmt.Sprintf(`[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":%q,"server_port":%d,"version":"5","username":"whisp","password":%q}`, host, port, pass)
+		if needBlock {
+			outbounds += `,{"type":"block","tag":"block"}`
+		}
+		outbounds += `]`
 	} else {
 		finalOut = "direct"
-		outbounds = `[{"type":"direct","tag":"direct"}]`
+		if needBlock {
+			outbounds = `[{"type":"direct","tag":"direct"},{"type":"block","tag":"block"}]`
+		} else {
+			outbounds = `[{"type":"direct","tag":"direct"}]`
+		}
+	}
+
+	sniffVal := "false"
+	if needSniff {
+		sniffVal = "true"
+	}
+
+	routeExtra := ""
+	if routesJSON != "" {
+		routeExtra = fmt.Sprintf(`,
+    "rules": %s`, routesJSON)
 	}
 
 	config := fmt.Sprintf(`{
@@ -130,14 +242,14 @@ func Start(fd int32, workDir string, socksAddr string, connKey string) (retErr e
     "mtu": 1500,
     "auto_route": false,
     "stack": "mixed",
-    "sniff": false
+    "sniff": %s
   }],
   "outbounds": %s,
   "route": {
     "final": "%s",
-    "auto_detect_interface": false
+    "auto_detect_interface": false%s
   }
-}`, outbounds, finalOut)
+}`, sniffVal, outbounds, finalOut, routeExtra)
 
 	alog(fmt.Sprintf("calling NewService fd=%d", fd))
 	s, err := libbox.NewService(config, &platform{tunFd: fd})

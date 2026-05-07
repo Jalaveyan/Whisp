@@ -1648,7 +1648,7 @@ function renderShell(): void {
   burger?.addEventListener("click", openDrawer);
   overlay?.addEventListener("click", closeDrawer);
 
-  // Swipe-from-edge: тач, начинающийся в первых 30px слева, открывает drawer.
+  // Swipe-from-edge: тач, начинающийся в первых 50px слева, открывает drawer.
   // Тач на drawer'е, который двигается влево больше 60px, — закрывает.
   // touchmove слушается с passive:false чтобы вызвать preventDefault() и не
   // дать системе Android перехватить горизонтальный жест как «назад».
@@ -1659,7 +1659,7 @@ function renderShell(): void {
     const t = e.touches[0];
     if (!t) return;
     const drawerOpen = sidebar?.classList.contains("open") ?? false;
-    if (!drawerOpen && t.clientX < 30) {
+    if (!drawerOpen && t.clientX < 50) {
       touchStartX = t.clientX;
       touchStartY = t.clientY;
       touchMode = "open";
