@@ -10,6 +10,8 @@ package singbox
 import "C"
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -111,7 +113,9 @@ func Start(fd int32, workDir string, socksAddr string, connKey string) (retErr e
 		if p, err := strconv.Atoi(portStr); err == nil {
 			port = p
 		}
-		outbounds = fmt.Sprintf(`[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":%q,"server_port":%d,"version":"5"}]`, host, port)
+		h := sha256.Sum256([]byte(connKey))
+		pass := hex.EncodeToString(h[:])
+		outbounds = fmt.Sprintf(`[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":%q,"server_port":%d,"version":"5","username":"whisp","password":%q}]`, host, port, pass)
 	} else {
 		finalOut = "direct"
 		outbounds = `[{"type":"direct","tag":"direct"}]`
