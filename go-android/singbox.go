@@ -118,7 +118,7 @@ func Start(fd int32, workDir string, socksAddr string, connKey string) (retErr e
     "address": ["172.19.0.1/30"],
     "mtu": 1500,
     "auto_route": false,
-    "stack": "gvisor",
+    "stack": "mixed",
     "sniff": false
   }],
   "outbounds": %s,

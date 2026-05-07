@@ -1648,9 +1648,10 @@ function renderShell(): void {
   burger?.addEventListener("click", openDrawer);
   overlay?.addEventListener("click", closeDrawer);
 
-  // Swipe-from-edge: тач, начинающийся в первых 24px слева, открывает drawer.
+  // Swipe-from-edge: тач, начинающийся в первых 30px слева, открывает drawer.
   // Тач на drawer'е, который двигается влево больше 60px, — закрывает.
-  // Чисто JS, без css transitions during drag — простой пороговый трекер.
+  // touchmove слушается с passive:false чтобы вызвать preventDefault() и не
+  // дать системе Android перехватить горизонтальный жест как «назад».
   let touchStartX = 0;
   let touchStartY = 0;
   let touchMode: "open" | "close" | null = null;
@@ -1658,7 +1659,7 @@ function renderShell(): void {
     const t = e.touches[0];
     if (!t) return;
     const drawerOpen = sidebar?.classList.contains("open") ?? false;
-    if (!drawerOpen && t.clientX < 24) {
+    if (!drawerOpen && t.clientX < 30) {
       touchStartX = t.clientX;
       touchStartY = t.clientY;
       touchMode = "open";
@@ -1670,13 +1671,23 @@ function renderShell(): void {
       touchMode = null;
     }
   }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!touchMode) return;
+    const t = e.touches[0];
+    if (!t) return;
+    const dx = t.clientX - touchStartX;
+    const dy = Math.abs(t.clientY - touchStartY);
+    // Если жест стал вертикальным — отменяем режим, не блокируем скролл.
+    if (dy > Math.abs(dx) * 0.5) { touchMode = null; return; }
+    // Горизонтальный жест подтверждён — блокируем системный перехват.
+    if (Math.abs(dx) > 8) e.preventDefault();
+  }, { passive: false });
   document.addEventListener("touchend", (e) => {
     if (!touchMode) return;
     const t = e.changedTouches[0];
     if (!t) { touchMode = null; return; }
     const dx = t.clientX - touchStartX;
     const dy = Math.abs(t.clientY - touchStartY);
-    // Анти-фолс-позитив: вертикальное движение должно быть < 50% горизонтального.
     if (dy > Math.abs(dx) * 0.5) { touchMode = null; return; }
     if (touchMode === "open" && dx > 60) openDrawer();
     if (touchMode === "close" && dx < -60) closeDrawer();
