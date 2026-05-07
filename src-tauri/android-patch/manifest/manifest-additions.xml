@@ -23,6 +23,7 @@ SERVICE:
         <service
             android:name=".WhispVpnService"
             android:exported="false"
+            android:stopWithTask="false"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:foregroundServiceType="specialUse">
             <property

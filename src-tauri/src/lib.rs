@@ -1230,6 +1230,9 @@ struct SystemInfoResponse {
 
 #[tauri::command]
 fn get_system_info() -> Result<SystemInfoResponse, String> {
+    #[cfg(target_os = "android")]
+    let os_info = format!("Android ({})", std::env::consts::ARCH);
+    #[cfg(not(target_os = "android"))]
     let os_info = format!("Windows ({})", std::env::consts::ARCH);
 
     let uptime_ms = winapi_uptime();
@@ -2163,12 +2166,34 @@ pub fn run() {
     #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
     const EXE_EXT: &str = "";
 
-    // На Android Tauri пакетит sidecars в nativeLibraryDir как `lib<name>.so`.
-    // Без JNI прочитать nativeLibraryDir сложно — пробуем стандартные кандидаты
-    // (рядом с exe / стандартные пути под /data/data и /data/app).
+    // На Android current_exe() указывает на app_process64, а не на наш .so.
+    // Читаем /proc/self/maps чтобы найти реальный nativeLibraryDir по пути
+    // любого загруженного .so из нашего пакета.
+    #[cfg(target_os = "android")]
+    let android_native_lib_dir: Option<PathBuf> = (|| {
+        let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
+        for line in maps.lines() {
+            // Формат: addr perms offset dev inode [path]
+            let parts: Vec<&str> = line.splitn(6, ' ').collect();
+            let path_str = parts.get(5)?.trim();
+            if path_str.contains("com.whispera.whisp") && path_str.ends_with(".so") {
+                let p = std::path::Path::new(path_str);
+                if p.exists() {
+                    return p.parent().map(|d| d.to_path_buf());
+                }
+            }
+        }
+        None
+    })();
+
     #[cfg(target_os = "android")]
     let resolve_android_sidecar = |name: &str| -> PathBuf {
         let so_name = format!("lib{}.so", name);
+        // Сначала пробуем реальный nativeLibraryDir из /proc/self/maps
+        if let Some(ref lib_dir) = android_native_lib_dir {
+            let p = lib_dir.join(&so_name);
+            if p.exists() { return p; }
+        }
         let candidates = [
             exe_dir.join(&so_name),
             exe_dir.join(name),
