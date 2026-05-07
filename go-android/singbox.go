@@ -11,8 +11,10 @@ import "C"
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"unsafe"
 
@@ -104,7 +106,12 @@ func Start(fd int32, workDir string, socksAddr string, connKey string) (retErr e
 	var outbounds, finalOut string
 	if socksAddr != "" {
 		finalOut = "proxy"
-		outbounds = fmt.Sprintf(`[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":1080,"version":"5","username":"whisp","password":%q}]`, connKey)
+		host, portStr, _ := net.SplitHostPort(socksAddr)
+		port := 1080
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
+		}
+		outbounds = fmt.Sprintf(`[{"type":"direct","tag":"direct"},{"type":"socks","tag":"proxy","server":%q,"server_port":%d,"version":"5"}]`, host, port)
 	} else {
 		finalOut = "direct"
 		outbounds = `[{"type":"direct","tag":"direct"}]`
