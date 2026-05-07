@@ -19,16 +19,22 @@ class WhispVpnService : VpnService() {
         const val TAG = "WhispVpnService"
         const val ACTION_START = "com.whispera.whisp.ACTION_VPN_START"
         const val ACTION_STOP  = "com.whispera.whisp.ACTION_VPN_STOP"
-        const val EXTRA_CONN_KEY  = "com.whispera.whisp.EXTRA_CONN_KEY"
+        const val EXTRA_CONN_KEY   = "com.whispera.whisp.EXTRA_CONN_KEY"
         const val EXTRA_RULES_JSON = "com.whispera.whisp.EXTRA_RULES_JSON"
+        const val EXTRA_VPN_DNS    = "com.whispera.whisp.EXTRA_VPN_DNS"
+        const val EXTRA_IPV6       = "com.whispera.whisp.EXTRA_IPV6"
         const val NOTIFICATION_ID = 17
         const val CHANNEL_ID = "whisp_vpn_channel"
+
+        @Volatile @JvmField var isRunning: Boolean = false
     }
 
     private var tunInterface: ParcelFileDescriptor? = null
     private var goClientProc: Process? = null
     private var pendingConnKey: String = ""
     private var pendingRulesJson: String = ""
+    private var pendingVpnDns: String = "1.1.1.1"
+    private var pendingIpv6: Boolean = true
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private fun toast(msg: String) {
@@ -39,10 +45,13 @@ class WhispVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
             when (intent?.action) {
-                ACTION_STOP -> { stopVpn(); return START_NOT_STICKY }
+                ACTION_STOP -> { isRunning = false; stopVpn(); return START_NOT_STICKY }
                 else -> {
-                    pendingConnKey  = intent?.getStringExtra(EXTRA_CONN_KEY)  ?: ""
+                    isRunning = true
+                    pendingConnKey   = intent?.getStringExtra(EXTRA_CONN_KEY)   ?: ""
                     pendingRulesJson = intent?.getStringExtra(EXTRA_RULES_JSON) ?: ""
+                    pendingVpnDns    = intent?.getStringExtra(EXTRA_VPN_DNS)?.takeIf { it.isNotEmpty() } ?: "1.1.1.1"
+                    pendingIpv6      = (intent?.getStringExtra(EXTRA_IPV6) ?: "1") != "0"
                     startVpnSafe()
                 }
             }
@@ -71,8 +80,8 @@ class WhispVpnService : VpnService() {
                 .setMtu(1500)
                 .addAddress("172.19.0.1", 30)
                 .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
-                .addDnsServer("1.1.1.1")
+                .also { if (pendingIpv6) it.addRoute("::", 0) }
+                .addDnsServer(pendingVpnDns)
                 .also { try { it.addDisallowedApplication(packageName) } catch (_: Throwable) {} }
                 .establish()
         } catch (t: Throwable) {
@@ -93,6 +102,12 @@ class WhispVpnService : VpnService() {
                     "-no-tun")
                     .redirectErrorStream(true)
                     .start()
+                // Drain stdout/stderr — without this, a full pipe buffer blocks the process
+                goClientProc?.inputStream?.let { stream ->
+                    Thread({
+                        try { val buf = ByteArray(8192); while (stream.read(buf) != -1) {} } catch (_: Throwable) {}
+                    }, "goclient-drain").apply { isDaemon = true }.start()
+                }
                 Thread.sleep(800)
                 toast("go-client started")
             } catch (t: Throwable) {
@@ -128,6 +143,7 @@ class WhispVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        isRunning = false
         try { stopVpn() } catch (_: Throwable) {}
         super.onDestroy()
     }

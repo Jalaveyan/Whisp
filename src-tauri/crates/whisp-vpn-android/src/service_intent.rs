@@ -23,6 +23,8 @@ const ACTION_START: &str = "com.whispera.whisp.ACTION_VPN_START";
 const ACTION_STOP: &str = "com.whispera.whisp.ACTION_VPN_STOP";
 const EXTRA_RULES_JSON: &str = "com.whispera.whisp.EXTRA_RULES_JSON";
 const EXTRA_CONN_KEY: &str = "com.whispera.whisp.EXTRA_CONN_KEY";
+const EXTRA_VPN_DNS: &str = "com.whispera.whisp.EXTRA_VPN_DNS";
+const EXTRA_IPV6: &str = "com.whispera.whisp.EXTRA_IPV6";
 
 fn vm_and_ctx() -> Result<(JavaVM, *mut std::ffi::c_void), String> {
     // SAFETY: ndk_context::android_context() возвращает указатели,
@@ -38,7 +40,7 @@ fn vm_and_ctx() -> Result<(JavaVM, *mut std::ffi::c_void), String> {
     Ok((vm, ctx.context()))
 }
 
-fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>, stop: bool) -> Result<(), String> {
+fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>, vpn_dns: Option<&str>, ipv6: Option<bool>, stop: bool) -> Result<(), String> {
     let (vm, ctx_ptr) = vm_and_ctx()?;
     let mut env = vm
         .attach_current_thread()
@@ -103,38 +105,32 @@ fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>, s
     };
     if let Some(rules) = rules_json { put_extra(EXTRA_RULES_JSON, rules)?; }
     if let Some(key) = conn_key { put_extra(EXTRA_CONN_KEY, key)?; }
+    if let Some(dns) = vpn_dns { put_extra(EXTRA_VPN_DNS, dns)?; }
+    if let Some(v6) = ipv6 { put_extra(EXTRA_IPV6, if v6 { "1" } else { "0" })?; }
 
-    if stop {
-        // stopService безопасен даже если сервис уже мёртв.
-        env.call_method(
-            &context,
-            "stopService",
-            "(Landroid/content/Intent;)Z",
-            &[JValue::Object(&intent)],
-        )
-        .map_err(|e| format!("stopService: {}", e))?;
-    } else {
-        // VPN всегда foreground (Android 8+ убьёт обычный сервис в фоне).
-        env.call_method(
-            &context,
-            "startForegroundService",
-            "(Landroid/content/Intent;)Landroid/content/ComponentName;",
-            &[JValue::Object(&intent)],
-        )
-        .map_err(|e| format!("startForegroundService: {}", e))?;
-    }
+    // Для старта и для стопа используем startForegroundService:
+    // stopService() не вызывает onStartCommand, поэтому ACTION_STOP не доходит.
+    // startForegroundService → onStartCommand → наш when(action) обрабатывает оба кейса.
+    env.call_method(
+        &context,
+        "startForegroundService",
+        "(Landroid/content/Intent;)Landroid/content/ComponentName;",
+        &[JValue::Object(&intent)],
+    )
+    .map_err(|e| format!("startForegroundService: {}", e))?;
 
     Ok(())
 }
 
-pub fn start_vpn_service(rules_json: &str, conn_key: &str) -> Result<(), String> {
-    let r = send_action(ACTION_START, Some(rules_json), Some(conn_key), false);
+pub fn start_vpn_service(rules_json: &str, conn_key: &str, vpn_dns: &str, ipv6: bool) -> Result<(), String> {
+    let dns = if vpn_dns.is_empty() { None } else { Some(vpn_dns) };
+    let r = send_action(ACTION_START, Some(rules_json), Some(conn_key), dns, Some(ipv6), false);
     if r.is_ok() { set_vpn_active(true); }
     r
 }
 
 pub fn stop_vpn_service() -> Result<(), String> {
-    let r = send_action(ACTION_STOP, None, None, true);
+    let r = send_action(ACTION_STOP, None, None, None, None, true);
     set_vpn_active(false);
     r
 }
@@ -198,4 +194,90 @@ pub fn request_vpn_permission() -> Result<i32, String> {
         .and_then(|v| v.i())
         .map_err(|e| format!("requestPermission: {}", e))?;
     Ok(result)
+}
+
+/// Сохраняет параметры VPN в WhispVpnPrep.savePending() для авто-запуска
+/// после onActivityResult (пользователь разрешил VPN).
+pub fn save_pending_start(rules_json: &str, conn_key: &str, vpn_dns: &str, ipv6: bool) -> Result<(), String> {
+    let (vm, ctx_ptr) = vm_and_ctx()?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let context = unsafe { JObject::from_raw(ctx_ptr as jni::sys::jobject) };
+    let app_loader = env
+        .call_method(&context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .and_then(|v| v.l())
+        .map_err(|e| format!("getClassLoader: {}", e))?;
+    let cls_name = env.new_string(PREP_CLASS.replace('/', ".")).map_err(|e| e.to_string())?;
+    let cls = env
+        .call_method(&app_loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", &[JValue::Object(&cls_name.into())])
+        .and_then(|v| v.l())
+        .map_err(|e| format!("loadClass WhispVpnPrep: {}", e))?;
+    let cls_class: jni::objects::JClass = cls.into();
+    let j_rules  = env.new_string(rules_json).map_err(|e| e.to_string())?;
+    let j_key    = env.new_string(conn_key).map_err(|e| e.to_string())?;
+    let j_dns    = env.new_string(vpn_dns).map_err(|e| e.to_string())?;
+    env.call_static_method(
+        &cls_class,
+        "savePending",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V",
+        &[
+            JValue::Object(&j_rules.into()),
+            JValue::Object(&j_key.into()),
+            JValue::Object(&j_dns.into()),
+            JValue::Bool(if ipv6 { 1 } else { 0 }),
+        ],
+    )
+    .map_err(|e| format!("savePending: {}", e))?;
+    Ok(())
+}
+
+/// Проверяет статический флаг WhispVpnService.isRunning.
+/// Если процесс жив (foreground service), флаг корректен после перезапуска Activity.
+pub fn is_vpn_service_running() -> bool {
+    let Ok((vm, ctx_ptr)) = vm_and_ctx() else { return false; };
+    let Ok(mut env) = vm.attach_current_thread() else { return false; };
+    let context = unsafe { JObject::from_raw(ctx_ptr as jni::sys::jobject) };
+    let Ok(loader) = env
+        .call_method(&context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .and_then(|v| v.l()) else { return false; };
+    let Ok(cls_name) = env.new_string(SERVICE_CLASS.replace('/', ".")) else { return false; };
+    let Ok(cls) = env
+        .call_method(&loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", &[JValue::Object(&cls_name.into())])
+        .and_then(|v| v.l()) else { return false; };
+    let cls_class: jni::objects::JClass = cls.into();
+    env.get_static_field(&cls_class, "isRunning", "Z")
+        .and_then(|v| v.z())
+        .unwrap_or(false)
+}
+
+/// Открывает URL через Android Intent.ACTION_VIEW.
+pub fn open_url_android(url: &str) -> Result<(), String> {
+    let (vm, ctx_ptr) = vm_and_ctx()?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let context = unsafe { JObject::from_raw(ctx_ptr as jni::sys::jobject) };
+
+    let uri_class = env.find_class("android/net/Uri").map_err(|e| format!("find Uri: {}", e))?;
+    let j_url = env.new_string(url).map_err(|e| e.to_string())?;
+    let uri = env
+        .call_static_method(&uri_class, "parse", "(Ljava/lang/String;)Landroid/net/Uri;",
+            &[JValue::Object(&j_url.into())])
+        .and_then(|v| v.l())
+        .map_err(|e| format!("Uri.parse: {}", e))?;
+
+    let intent_class = env.find_class("android/content/Intent").map_err(|e| format!("find Intent: {}", e))?;
+    let action_view = env.new_string("android.intent.action.VIEW").map_err(|e| e.to_string())?;
+    let intent = env
+        .new_object(&intent_class, "(Ljava/lang/String;Landroid/net/Uri;)V",
+            &[JValue::Object(&action_view.into()), JValue::Object(&uri)])
+        .map_err(|e| format!("new Intent: {}", e))?;
+
+    // FLAG_ACTIVITY_NEW_TASK required when starting Activity from non-Activity context
+    env.call_method(&intent, "addFlags", "(I)Landroid/content/Intent;",
+        &[JValue::Int(0x10000000)])  // FLAG_ACTIVITY_NEW_TASK
+        .map_err(|e| format!("addFlags: {}", e))?;
+
+    env.call_method(&context, "startActivity", "(Landroid/content/Intent;)V",
+        &[JValue::Object(&intent)])
+        .map_err(|e| format!("startActivity: {}", e))?;
+
+    Ok(())
 }

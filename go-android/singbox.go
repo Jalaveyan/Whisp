@@ -234,7 +234,7 @@ func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson
 	}
 
 	config := fmt.Sprintf(`{
-  "log": {"level": "debug", "output": ""},
+  "log": {"level": "warn", "output": ""},
   "inbounds": [{
     "type": "tun",
     "tag": "tun-in",

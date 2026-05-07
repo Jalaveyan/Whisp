@@ -1222,6 +1222,8 @@ function getNodePos(id: string, idx: number): { x: number; y: number } {
   return { x: 20 + col * 270, y: 20 + row * 240 };
 }
 
+const isAndroid = /android/i.test(navigator.userAgent);
+
 let settings: AppSettings = {
   conn_key: "", auto_connect: false, theme: "dark", mihomo_port: 9887,
   socks_addr: "127.0.0.1", kill_switch: false, dns_redirect: false,
@@ -1485,7 +1487,11 @@ async function doDisconnect(): Promise<void> {
 }
 
 async function checkStatus(): Promise<void> {
-  try { isConnected = await invoke<boolean>("get_status"); } catch {/**/ }
+  try {
+    const was = isConnected;
+    isConnected = await invoke<boolean>("get_status");
+    if (isConnected && !was && connectTime === null) connectTime = Date.now();
+  } catch {/**/ }
 }
 
 /* Site checks — update DOM in-place, no flicker */
@@ -2717,7 +2723,7 @@ function bindConnectionsEvents(): void {
       return;
     }
     try {
-      await invoke("encapsulate_connections", { outer, inner });
+      await invoke("encapsulate_connection", { innerId: inner, outerId: outer });
       showToast(t("encapApplied"), "success", 2000);
     } catch (e) {
       showToast(String(e), "error", 3000);
@@ -2755,7 +2761,7 @@ function bindConnectionsEvents(): void {
 
   document.getElementById("btn-p2p-copy")?.addEventListener("click", () => {
     if (_p2pStatus.peer_id) {
-      invoke("write_clipboard", { text: _p2pStatus.peer_id }).catch(() => navigator.clipboard?.writeText(_p2pStatus.peer_id));
+      clipboardWrite(_p2pStatus.peer_id).catch(() => navigator.clipboard?.writeText(_p2pStatus.peer_id));
       showToast(t("copied"), "success", 1500);
     }
   });
@@ -3664,6 +3670,41 @@ function getFPDescription(fp: string): string {
 }
 
 function renderSettings(): string {
+  const vpnDnsVal = settings.vpn_dns || "1.1.1.1";
+  const vpnDnsPills = [
+    ["1.1.1.1", "1.1.1.1"],
+    ["8.8.8.8", "8.8.8.8"],
+    ["77.88.8.8", "Yandex"],
+    ["system", t("isp")],
+  ].map(([v, l]) =>
+    `<button class="pill-btn${vpnDnsVal === v || (v === "1.1.1.1" && !settings.vpn_dns) ? " active" : ""}" data-vpndns="${v}">${l}</button>`
+  ).join("");
+
+  if (isAndroid) {
+    return `<div class="page-header"><h2 class="page-title">${t("settings")}</h2></div>
+    <div class="settings-section">
+      <div class="settings-section-title">sing-box</div>
+      <div class="setting-row"><span class="setting-label">${t("vpnDns")}</span><div class="setting-value" style="flex-direction:column;align-items:stretch;gap:6px">
+        <div class="pill-group" style="flex-wrap:wrap;gap:4px">${vpnDnsPills}</div>
+        <input type="text" id="set-vpn-dns" value="${esc(vpnDnsVal)}" placeholder="1.1.1.1" style="width:100%;box-sizing:border-box"/>
+        <span style="font-size:11px;opacity:.5">${t("vpnDnsHint")}</span>
+      </div></div>
+      <div class="setting-row"><span class="setting-label">${t("ipv6Label")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-ipv6" ${settings.ipv6 ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
+      <div class="setting-row"><span class="setting-label">${t("theme")}</span><div class="setting-value"><div class="pill-group">
+        <button class="pill-btn ${settings.theme === "dark" ? "active" : ""}" data-theme="dark">${t("dark")}</button>
+        <button class="pill-btn ${settings.theme === "auto" ? "active" : ""}" data-theme="auto">${t("auto")}</button>
+      </div></div></div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-header"><span class="settings-section-title">${t("whisp")}</span><span class="settings-link">${t("installed")}</span></div>
+      <div class="setting-row"><span class="setting-label">${t("hwid")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-hwid" ${settings.hwid ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
+      <div class="setting-row"><span class="setting-label">${t("autostart")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-autostart" ${settings.auto_connect ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
+      <div class="setting-row"><span class="setting-label">${t("authTip")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-authtip" ${settings.auth_tip ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
+      <div class="setting-row"><span class="setting-label">${t("update")}</span><div class="setting-value"><button class="btn-sm" id="btn-open-repo">${t("openRepo")}</button><button class="btn-sm" id="btn-check-updates">${t("checkUpdates")}</button></div></div>
+    </div>
+    `;
+  }
+
   return `<div class="page-header"><h2 class="page-title">${t("settings")}</h2></div>
     <div class="settings-section">
       <div class="settings-section-title">${t("mihomo")}</div>
@@ -3684,13 +3725,8 @@ function renderSettings(): string {
         <span style="font-size:11px;opacity:.5">${t("dnsCommaSep")}</span>
       </div></div>
       <div class="setting-row"><span class="setting-label">${t("vpnDns")}</span><div class="setting-value" style="flex-direction:column;align-items:stretch;gap:6px">
-        <div class="pill-group" style="flex-wrap:wrap;gap:4px">
-          <button class="pill-btn${!settings.vpn_dns || settings.vpn_dns === '' ? ' active' : ''}" data-vpndns="1.1.1.1:53">1.1.1.1</button>
-          <button class="pill-btn${settings.vpn_dns === '8.8.8.8:53' ? ' active' : ''}" data-vpndns="8.8.8.8:53">8.8.8.8</button>
-          <button class="pill-btn${settings.vpn_dns === '77.88.8.8:53' ? ' active' : ''}" data-vpndns="77.88.8.8:53">Yandex</button>
-          <button class="pill-btn${settings.vpn_dns === 'system' ? ' active' : ''}" data-vpndns="system">${t("isp")}</button>
-        </div>
-        <input type="text" id="set-vpn-dns" value="${esc(settings.vpn_dns || '1.1.1.1:53')}" placeholder="1.1.1.1:53" style="width:100%;box-sizing:border-box"/>
+        <div class="pill-group" style="flex-wrap:wrap;gap:4px">${vpnDnsPills}</div>
+        <input type="text" id="set-vpn-dns" value="${esc(vpnDnsVal)}" placeholder="1.1.1.1:53" style="width:100%;box-sizing:border-box"/>
         <span style="font-size:11px;opacity:.5">${t("vpnDnsHint")}</span>
       </div></div>
       <div class="setting-row"><span class="setting-label">${t("ipv6Label")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-ipv6" ${settings.ipv6 ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>

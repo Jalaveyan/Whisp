@@ -300,23 +300,35 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
     #[cfg(target_os = "android")]
     {
         let _ = state;
+        let settings = get_app_settings(app.clone())?;
+        let rules_json = build_android_rules_json(&settings);
+        let conn_key = settings.conn_key.clone();
+        let vpn_dns = settings.vpn_dns.clone();
+        let ipv6 = settings.ipv6;
+
         let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
             whisp_vpn_android::service_intent::is_vpn_prepared,
         ))
         .unwrap_or(Ok(false))
         .unwrap_or(false);
+
         if !prepared {
+            // Сохраняем параметры до показа диалога — onActivityResult
+            // запустит VPN автоматически при RESULT_OK
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                whisp_vpn_android::service_intent::save_pending_start(
+                    &rules_json, &conn_key, &vpn_dns, ipv6,
+                )
+            }));
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                 whisp_vpn_android::service_intent::request_vpn_permission,
             ));
-            return Err("Откройте диалог разрешения VPN в Android и нажмите Connect ещё раз".to_string());
+            // Ok — фронтенд переходит в "connecting", VPN стартует из onActivityResult
+            return Ok("Android VPN starting".to_string());
         }
 
-        let settings = get_app_settings(app.clone())?;
-        let rules_json = build_android_rules_json(&settings);
-        let conn_key = settings.conn_key.clone();
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            whisp_vpn_android::service_intent::start_vpn_service(&rules_json, &conn_key)
+            whisp_vpn_android::service_intent::start_vpn_service(&rules_json, &conn_key, &vpn_dns, ipv6)
         }));
         match res {
             Ok(Ok(())) => return Ok("Android VPN starting".to_string()),
@@ -666,7 +678,12 @@ fn get_status(state: tauri::State<AppState>) -> Result<bool, String> {
     #[cfg(target_os = "android")]
     {
         let _ = state;
-        return Ok(whisp_vpn_android::service_intent::is_vpn_active());
+        // is_vpn_active() корректен, пока процесс жив (foreground service).
+        // is_vpn_service_running() синхронизирует флаг на случай перезапуска Activity.
+        let active = whisp_vpn_android::service_intent::is_vpn_active()
+            || whisp_vpn_android::service_intent::is_vpn_service_running();
+        if active { whisp_vpn_android::service_intent::set_vpn_active(true); }
+        return Ok(active);
     }
     #[allow(unreachable_code)]
     {
@@ -1296,6 +1313,11 @@ fn validate_external_url(url: &str) -> Result<(), String> {
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     validate_external_url(&url)?;
+
+    #[cfg(target_os = "android")]
+    {
+        return whisp_vpn_android::service_intent::open_url_android(&url);
+    }
 
     #[cfg(target_os = "windows")]
     {
