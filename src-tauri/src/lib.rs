@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
+#[cfg(not(target_os = "android"))]
+use tauri_plugin_shell::ShellExt;
 
 mod go_client;
 mod mihomo;
@@ -231,6 +233,8 @@ struct AppState {
     go_client: Mutex<GoClientManager>,
     ml_server: Mutex<MlServerManager>,
     watchdog_specs: Mutex<Vec<ExtraKeySpec>>,
+    // socks5h://whisp:<sha256hex>@127.0.0.1:1080 — заполняется при connect на Android
+    android_proxy: Mutex<Option<String>>,
 }
 
 fn settings_path(app: &tauri::AppHandle) -> PathBuf {
@@ -327,12 +331,22 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
     // правилами уже в config.yaml.
     #[cfg(target_os = "android")]
     {
-        let _ = state;
         let settings = get_app_settings(app.clone())?;
         let rules_json = build_android_rules_json(&settings);
         let conn_key = settings.conn_key.clone();
         let vpn_dns = settings.vpn_dns.clone();
         let ipv6 = settings.ipv6;
+
+        // Сохраняем SOCKS5 URL для check_site/get_ip_info через VPN
+        if !conn_key.is_empty() {
+            use sha2::Digest;
+            let hash = sha2::Sha256::digest(conn_key.as_bytes());
+            let pass: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+            let proxy_url = format!("socks5h://whisp:{}@127.0.0.1:1080", pass);
+            if let Ok(mut p) = state.android_proxy.lock() {
+                *p = Some(proxy_url);
+            }
+        }
 
         let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
             whisp_vpn_android::service_intent::is_vpn_prepared,
@@ -687,7 +701,7 @@ fn disconnect(state: tauri::State<AppState>) -> Result<String, String> {
     // напрямую отсюда).
     #[cfg(target_os = "android")]
     {
-        let _ = state;
+        if let Ok(mut p) = state.android_proxy.lock() { *p = None; }
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
             whisp_vpn_android::service_intent::stop_vpn_service,
         ));
@@ -832,9 +846,14 @@ async fn toggle_obfuscation(id: String, enabled: bool) -> Result<bool, String> {
 async fn switch_transport(id: String, transport: String) -> Result<bool, String> {
     let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build()
         .map_err(|e| e.to_string())?;
-    client.post(conn_url(&id, "transport"))
+    let resp = client.post(conn_url(&id, "transport"))
         .json(&serde_json::json!({"transport": transport}))
         .send().await.map_err(|_| "control server unavailable".to_string())?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("transport switch failed ({}): {}", status.as_u16(), body.trim()));
+    }
     Ok(true)
 }
 
@@ -1191,37 +1210,54 @@ struct SiteCheckResult {
 }
 
 #[tauri::command]
-async fn check_site(url: String) -> Result<SiteCheckResult, String> {
-    let host = url
-        .replace("https://", "")
-        .replace("http://", "")
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_string();
+async fn check_site(url: String, state: tauri::State<'_, AppState>) -> Result<SiteCheckResult, String> {
+    let proxy_url = state.android_proxy.lock().ok().and_then(|g| g.clone());
 
-    if host.is_empty() {
-        return Err("Invalid URL".to_string());
-    }
-
-    let addr = format!("{}:443", host);
     let start = std::time::Instant::now();
 
-    match tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::net::TcpStream::connect(&addr),
-    )
-    .await
-    {
-        Ok(Ok(_stream)) => {
-            let ping = start.elapsed().as_millis() as u64;
-            Ok(SiteCheckResult {
-                status: 200,
-                ping_ms: ping,
-            })
+    if let Some(ref proxy) = proxy_url {
+        // На Android: проверяем через VPN-прокси (go-client SOCKS5)
+        let target = if url.starts_with("http") { url.clone() } else { format!("https://{}", url) };
+        let mut builder = reqwest::Client::builder()
+            .timeout(Duration::from_secs(8));
+        if let Ok(p) = reqwest::Proxy::all(proxy.as_str()) {
+            builder = builder.proxy(p);
         }
-        Ok(Err(e)) => Err(format!("Connect failed: {}", e)),
-        Err(_) => Err("Timeout".to_string()),
+        let client = builder.build().map_err(|e| e.to_string())?;
+        match client.head(&target).send().await {
+            Ok(resp) => Ok(SiteCheckResult {
+                status: resp.status().as_u16(),
+                ping_ms: start.elapsed().as_millis() as u64,
+            }),
+            Err(e) if e.is_timeout() => Err("Timeout".to_string()),
+            Err(e) => Err(format!("Connect failed: {}", e)),
+        }
+    } else {
+        // Desktop / VPN не активен: прямой TCP connect
+        let host = url
+            .replace("https://", "")
+            .replace("http://", "")
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
+        if host.is_empty() {
+            return Err("Invalid URL".to_string());
+        }
+        let addr = format!("{}:443", host);
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::net::TcpStream::connect(&addr),
+        )
+        .await
+        {
+            Ok(Ok(_)) => Ok(SiteCheckResult {
+                status: 200,
+                ping_ms: start.elapsed().as_millis() as u64,
+            }),
+            Ok(Err(e)) => Err(format!("Connect failed: {}", e)),
+            Err(_) => Err("Timeout".to_string()),
+        }
     }
 }
 
@@ -1236,11 +1272,16 @@ struct IpInfoResponse {
 }
 
 #[tauri::command]
-async fn get_ip_info() -> Result<IpInfoResponse, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|e| e.to_string())?;
+async fn get_ip_info(state: tauri::State<'_, AppState>) -> Result<IpInfoResponse, String> {
+    let proxy_url = state.android_proxy.lock().ok().and_then(|g| g.clone());
+
+    let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(8));
+    if let Some(ref proxy) = proxy_url {
+        if let Ok(p) = reqwest::Proxy::all(proxy.as_str()) {
+            builder = builder.proxy(p);
+        }
+    }
+    let client = builder.build().map_err(|e| e.to_string())?;
 
     let resp = client
         .get("https://ipinfo.io/json")
@@ -1339,6 +1380,16 @@ fn open_config_dir(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+fn pem_to_der(pem: &[u8]) -> Option<Vec<u8>> {
+    let s = std::str::from_utf8(pem).ok()?;
+    let b64: String = s.lines()
+        .filter(|l| !l.starts_with('-') && !l.is_empty())
+        .collect();
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.decode(&b64).ok()
+}
+
 fn validate_external_url(url: &str) -> Result<(), String> {
     if url.len() > 2048 {
         return Err("url too long".into());
@@ -1389,34 +1440,63 @@ fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn install_mitm_ca() -> Result<(), String> {
-    // Fetch CA cert from local go-client control API
-    let ca_bytes = reqwest::Client::new()
+async fn install_mitm_ca(app: tauri::AppHandle) -> Result<(), String> {
+    let cache_path = app.path().app_config_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("mitm-ca.crt");
+
+    // Try to fetch fresh CA from go-client; fall back to cached copy.
+    let ca_bytes: Vec<u8> = match reqwest::Client::new()
         .get("http://127.0.0.1:10801/mitm/ca")
         .timeout(Duration::from_secs(5))
         .send()
         .await
-        .map_err(|e| format!("CA fetch failed: {}", e))?
-        .bytes()
-        .await
-        .map_err(|e| format!("CA read failed: {}", e))?;
+    {
+        Ok(resp) => {
+            let bytes = resp.bytes().await.map_err(|e| format!("CA read: {}", e))?.to_vec();
+            let _ = fs::write(&cache_path, &bytes);
+            bytes
+        }
+        Err(_) => {
+            if cache_path.exists() {
+                fs::read(&cache_path).map_err(|e| format!("CA cache read: {}", e))?
+            } else {
+                return Err("go-client не запущен и кеш CA отсутствует — сначала подключитесь".into());
+            }
+        }
+    };
 
     #[cfg(target_os = "android")]
     {
-        return whisp_vpn_android::service_intent::install_ca_cert_android(&ca_bytes);
+        // KeyChain.createInstallIntent() expects DER-encoded bytes.
+        // go-client typically serves PEM — convert if needed.
+        let der = if ca_bytes.starts_with(b"-----BEGIN") {
+            pem_to_der(&ca_bytes).unwrap_or_else(|| ca_bytes.clone())
+        } else {
+            ca_bytes.clone()
+        };
+        return whisp_vpn_android::service_intent::install_ca_cert_android(&der);
     }
 
     #[cfg(target_os = "windows")]
     {
         let tmp_path = std::env::temp_dir().join("whispera-ca.crt");
         fs::write(&tmp_path, &ca_bytes).map_err(|e| format!("write temp: {}", e))?;
-        let status = std::process::Command::new("certutil")
-            .args(["-addstore", "-user", "Root", &tmp_path.to_string_lossy()])
-            .status()
-            .map_err(|e| format!("certutil: {}", e))?;
+        // Use PowerShell X509Store — no confirmation dialog unlike certutil
+        let ps_script = format!(
+            "$cert=New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('{}'); \
+             $store=New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','CurrentUser'); \
+             $store.Open('ReadWrite'); $store.Add($cert); $store.Close()",
+            tmp_path.to_string_lossy().replace('\'', "''")
+        );
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+            .output()
+            .map_err(|e| format!("powershell: {}", e))?;
         let _ = fs::remove_file(&tmp_path);
-        if !status.success() {
-            return Err(format!("certutil exit code {}", status.code().unwrap_or(-1)));
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(format!("CA install failed: {}", stderr.trim()));
         }
         return Ok(());
     }
@@ -1874,6 +1954,20 @@ fn rename_subscription(app: tauri::AppHandle, id: String, name: String) -> Resul
 }
 
 #[tauri::command]
+async fn check_subscription_update(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<SubscriptionEntry, String> {
+    let subs = load_subs(&app);
+    let sub = subs.iter().find(|s| s.id == id).ok_or("not found")?;
+    let url = sub.url.clone();
+    let fresh = fetch_sub_url(&url).await?;
+    let mut result = sub.clone();
+    result.updated = fresh.updated;
+    Ok(result)
+}
+
+#[tauri::command]
 async fn ping_key(key: String) -> Result<u64, String> {
     let key = key.trim();
     let host_port = key
@@ -2191,26 +2285,23 @@ struct ProcessInfo {
 }
 
 #[tauri::command]
-fn list_processes() -> Vec<ProcessInfo> {
+fn list_processes() -> Result<Vec<ProcessInfo>, String> {
     let mut result = Vec::new();
 
     // На Android нет понятия 'process list' для других приложений (security),
     // зато есть PackageManager — отдадим установленные пользовательские пакеты.
-    // Frontend на Android рендерит как пикер в кнопке 'Запущенные'.
+    // Frontend на Android рендерит как пикер в кнопке 'Выбрать приложение'.
     #[cfg(target_os = "android")]
     {
-        match whisp_vpn_android::pkg_list::list_user_packages() {
-            Ok(apps) => {
-                for (i, a) in apps.into_iter().enumerate() {
-                    result.push(ProcessInfo {
-                        name: format!("{} ({})", a.label, a.package),
-                        pid: i as u32,
-                    });
-                }
-            }
-            Err(e) => eprintln!("[whisp] pkg_list failed: {}", e),
+        let apps = whisp_vpn_android::pkg_list::list_user_packages()
+            .map_err(|e| format!("Ошибка PackageManager: {}", e))?;
+        for (i, a) in apps.into_iter().enumerate() {
+            result.push(ProcessInfo {
+                name: format!("{} ({})", a.label, a.package),
+                pid: i as u32,
+            });
         }
-        return result;
+        return Ok(result);
     }
 
     #[cfg(target_os = "windows")]
@@ -2261,7 +2352,173 @@ fn list_processes() -> Vec<ProcessInfo> {
     }
 
     result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    result
+    Ok(result)
+}
+
+// ── In-app update ──────────────────────────────────────────────────────────
+
+#[derive(Serialize, Clone)]
+struct UpdateInfo {
+    tag: String,
+    name: String,
+    body: String,
+    html_url: String,
+    download_url: String,
+    is_newer: bool,
+}
+
+fn is_newer_version(tag: &str, current: &str) -> bool {
+    let tag = tag.trim_start_matches('v');
+    let parse = |s: &str| -> Vec<u64> {
+        s.split('.').filter_map(|p| p.parse().ok()).collect()
+    };
+    parse(tag) > parse(current)
+}
+
+fn find_asset_url(assets: &serde_json::Value) -> String {
+    let arr = match assets.as_array() { Some(a) => a, None => return String::new() };
+    let names: Vec<(&str, &str)> = arr.iter()
+        .filter_map(|a| {
+            let name = a["name"].as_str()?;
+            let url = a["browser_download_url"].as_str()?;
+            Some((name, url))
+        })
+        .collect();
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some((_, url)) = names.iter().find(|(n, _)| n.ends_with("-setup.exe")) {
+            return url.to_string();
+        }
+        if let Some((_, url)) = names.iter().find(|(n, _)| n.ends_with(".exe")) {
+            return url.to_string();
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some((_, url)) = names.iter().find(|(n, _)| n.ends_with(".AppImage")) {
+            return url.to_string();
+        }
+        if let Some((_, url)) = names.iter().find(|(n, _)| n.ends_with(".deb")) {
+            return url.to_string();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some((_, url)) = names.iter().find(|(n, _)| n.ends_with(".app.tar.gz")) {
+            return url.to_string();
+        }
+        if let Some((_, url)) = names.iter().find(|(n, _)| n.ends_with(".dmg")) {
+            return url.to_string();
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        if let Some((_, url)) = names.iter().find(|(n, _)| n.ends_with(".apk")) {
+            return url.to_string();
+        }
+    }
+    String::new()
+}
+
+#[tauri::command]
+async fn check_for_updates() -> Result<UpdateInfo, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("whisp-updater/1.0")
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get("https://api.github.com/repos/Jalaveyan/Whisp/releases/latest")
+        .send()
+        .await
+        .map_err(|e| format!("GitHub API unavailable: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API: HTTP {}", resp.status().as_u16()));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    let tag = json["tag_name"].as_str().unwrap_or("").to_string();
+    let name = json["name"].as_str().unwrap_or(&tag).to_string();
+    let body = json["body"].as_str().unwrap_or("").to_string();
+    let html_url = json["html_url"].as_str().unwrap_or("").to_string();
+    let download_url = find_asset_url(&json["assets"]);
+    let current = env!("CARGO_PKG_VERSION");
+    let is_newer = is_newer_version(&tag, current);
+
+    Ok(UpdateInfo { tag, name, body, html_url, download_url, is_newer })
+}
+
+#[tauri::command]
+#[allow(unreachable_code)]
+async fn install_update(app: tauri::AppHandle, download_url: String, html_url: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        let url = if !download_url.is_empty() { &download_url } else { &html_url };
+        validate_external_url(url)?;
+        return whisp_vpn_android::service_intent::open_url_android(url);
+    }
+
+    if download_url.is_empty() {
+        #[cfg(not(target_os = "android"))]
+        #[allow(deprecated)]
+        app.shell().open(&html_url, None).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("whisp-updater/1.0")
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let filename = download_url.split('/').last().unwrap_or("whisp-installer");
+    let tmp_path = std::env::temp_dir().join(filename);
+
+    let bytes = client
+        .get(&download_url)
+        .send()
+        .await
+        .map_err(|e| format!("Download failed: {}", e))?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    std::fs::write(&tmp_path, &bytes).map_err(|e| format!("Write failed: {}", e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755)).ok();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new(&tmp_path)
+            .spawn()
+            .map_err(|e| format!("Launch failed: {}", e))?;
+        std::process::exit(0);
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        if download_url.ends_with(".AppImage") {
+            std::process::Command::new(&tmp_path)
+                .spawn()
+                .map_err(|e| format!("Launch failed: {}", e))?;
+            std::process::exit(0);
+        } else {
+            #[allow(deprecated)]
+            app.shell().open(tmp_path.to_string_lossy().as_ref(), None)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2367,6 +2624,7 @@ pub fn run() {
             go_client: Mutex::new(GoClientManager::new(go_client_path)),
             ml_server: Mutex::new(MlServerManager::new(ml_server_path, ml_log_path)),
             watchdog_specs: Mutex::new(Vec::new()),
+            android_proxy: Mutex::new(None),
         })
         .setup(|app| {
             #[cfg(not(target_os = "android"))]
@@ -2422,16 +2680,19 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Не блокируем главный поток: stop() может вызвать child.wait()
+                // и зависнуть если процесс не реагирует. Переносим в поток,
+                // после попытки остановки — жёсткий exit(0).
                 api.prevent_close();
-                let app = window.app_handle();
-                let state: tauri::State<AppState> = app.state();
-                state.mihomo.lock().ok().map(|mut m| m.stop().ok());
-                state.go_client.lock().ok().map(|mut gc| gc.stop().ok());
-                state.ml_server.lock().ok().map(|mut ml| ml.stop().ok());
-                #[cfg(desktop)]
-                window.close().ok();
-                #[cfg(not(desktop))]
-                let _ = window;
+                let app = window.app_handle().clone();
+                std::thread::spawn(move || {
+                    let state: tauri::State<AppState> = app.state();
+                    // try_lock чтобы не дедлочиться если mutex занят watchdog'ом
+                    let _ = state.mihomo.try_lock().map(|mut m| m.stop().ok());
+                    let _ = state.go_client.try_lock().map(|mut gc| gc.stop().ok());
+                    let _ = state.ml_server.try_lock().map(|mut ml| ml.stop().ok());
+                    std::process::exit(0);
+                });
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -2475,6 +2736,7 @@ pub fn run() {
             refresh_subscription,
             delete_subscription,
             rename_subscription,
+            check_subscription_update,
             ping_key,
             get_connections,
             close_connection,
@@ -2501,6 +2763,8 @@ pub fn run() {
             bridge_set_label,
             bridge_issue_ssh_key,
             bridge_rollout,
+            check_for_updates,
+            install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

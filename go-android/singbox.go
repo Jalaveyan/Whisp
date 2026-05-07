@@ -163,7 +163,7 @@ func (p *platform) ClearDNSCache()                                           {}
 func (p *platform) SendNotification(notification *libbox.Notification) error { return nil }
 
 // Start запускает sing-box. fd — ParcelFileDescriptor.getFd() из Kotlin.
-func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson string) (retErr error) {
+func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson string, ipv6 bool) (retErr error) {
 	alog(fmt.Sprintf("Start() ENTER fd=%d workDir=%s socksAddr=%s", fd, workDir, socksAddr))
 
 	defer func() {
@@ -233,12 +233,17 @@ func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson
     "rules": %s`, routesJSON)
 	}
 
+	tunAddrs := `"172.19.0.1/30"`
+	if ipv6 {
+		tunAddrs += `, "fdfe:dcba:9876::1/126"`
+	}
+
 	config := fmt.Sprintf(`{
   "log": {"level": "warn", "output": ""},
   "inbounds": [{
     "type": "tun",
     "tag": "tun-in",
-    "address": ["172.19.0.1/30"],
+    "address": [%s],
     "mtu": 1500,
     "auto_route": false,
     "stack": "mixed",
@@ -249,7 +254,7 @@ func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson
     "final": "%s",
     "auto_detect_interface": false%s
   }
-}`, sniffVal, outbounds, finalOut, routeExtra)
+}`, tunAddrs, sniffVal, outbounds, finalOut, routeExtra)
 
 	alog(fmt.Sprintf("calling NewService fd=%d", fd))
 	s, err := libbox.NewService(config, &platform{tunFd: fd})
