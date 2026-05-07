@@ -132,4 +132,31 @@ print("[android-patch] MainActivity: systemGestureExclusionRects injected")
 PYEOF
 fi
 
+# Copy network_security_config.xml so user-installed CAs are trusted (Android 7+).
+# Without this, MITM CA installed via KeyChain won't be trusted by apps.
+NSC_SRC="$ROOT/android-patch/res/xml/network_security_config.xml"
+NSC_DST="$GEN/app/src/main/res/xml/network_security_config.xml"
+if [ -f "$NSC_SRC" ]; then
+  mkdir -p "$(dirname "$NSC_DST")"
+  cp "$NSC_SRC" "$NSC_DST"
+  echo "[android-patch] network_security_config.xml copied"
+
+  # Patch <application> to reference network security config if not already set.
+  if ! grep -q "networkSecurityConfig" "$MANIFEST"; then
+    python3 - "$MANIFEST" <<'PY'
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+src = p.read_text(encoding="utf-8")
+# Insert attribute into opening <application tag
+src = re.sub(
+    r'(<application\b)',
+    r'\1 android:networkSecurityConfig="@xml/network_security_config"',
+    src, count=1
+)
+p.write_text(src, encoding="utf-8")
+print("[android-patch] manifest: networkSecurityConfig attribute added")
+PY
+  fi
+fi
+
 echo "[android-patch] done"

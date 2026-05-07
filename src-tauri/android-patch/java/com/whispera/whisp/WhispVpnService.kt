@@ -42,16 +42,54 @@ class WhispVpnService : VpnService() {
         mainHandler.post { Toast.makeText(this, "Whisp VPN: $msg", Toast.LENGTH_LONG).show() }
     }
 
+    private fun prefs() = getSharedPreferences("whisp_vpn", Context.MODE_PRIVATE)
+
+    private fun saveParams() {
+        prefs().edit()
+            .putString("conn_key",    pendingConnKey)
+            .putString("rules_json",  pendingRulesJson)
+            .putString("vpn_dns",     pendingVpnDns)
+            .putBoolean("ipv6",       pendingIpv6)
+            .apply()
+    }
+
+    private fun restoreParams(): Boolean {
+        val p = prefs()
+        val key = p.getString("conn_key", "") ?: ""
+        if (key.isEmpty()) return false
+        pendingConnKey   = key
+        pendingRulesJson = p.getString("rules_json", "") ?: ""
+        pendingVpnDns    = p.getString("vpn_dns", "1.1.1.1") ?: "1.1.1.1"
+        pendingIpv6      = p.getBoolean("ipv6", true)
+        return true
+    }
+
+    private fun clearParams() {
+        prefs().edit().clear().apply()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
             when (intent?.action) {
-                ACTION_STOP -> { isRunning = false; stopVpn(); return START_NOT_STICKY }
+                ACTION_STOP -> {
+                    isRunning = false
+                    clearParams()
+                    stopVpn()
+                    return START_NOT_STICKY
+                }
                 else -> {
+                    if (intent != null) {
+                        // Normal start — load params from intent and persist them.
+                        pendingConnKey   = intent.getStringExtra(EXTRA_CONN_KEY)   ?: ""
+                        pendingRulesJson = intent.getStringExtra(EXTRA_RULES_JSON) ?: ""
+                        pendingVpnDns    = intent.getStringExtra(EXTRA_VPN_DNS)?.takeIf { it.isNotEmpty() } ?: "1.1.1.1"
+                        pendingIpv6      = (intent.getStringExtra(EXTRA_IPV6) ?: "1") != "0"
+                        saveParams()
+                    } else {
+                        // OS restarted the service (START_STICKY) — restore saved params.
+                        if (!restoreParams()) { stopSelf(); return START_NOT_STICKY }
+                    }
                     isRunning = true
-                    pendingConnKey   = intent?.getStringExtra(EXTRA_CONN_KEY)   ?: ""
-                    pendingRulesJson = intent?.getStringExtra(EXTRA_RULES_JSON) ?: ""
-                    pendingVpnDns    = intent?.getStringExtra(EXTRA_VPN_DNS)?.takeIf { it.isNotEmpty() } ?: "1.1.1.1"
-                    pendingIpv6      = (intent?.getStringExtra(EXTRA_IPV6) ?: "1") != "0"
                     startVpnSafe()
                 }
             }
@@ -60,7 +98,9 @@ class WhispVpnService : VpnService() {
             try { stopForegroundCompat() } catch (_: Throwable) {}
             stopSelf()
         }
-        return START_NOT_STICKY
+        // START_STICKY: if the OS kills this process (OEM RAM management, low memory),
+        // Android will restart the service with a null intent so we restore from prefs.
+        return START_STICKY
     }
 
     private fun startVpnSafe() {
@@ -79,10 +119,12 @@ class WhispVpnService : VpnService() {
                 .setSession("Whisp VPN")
                 .setMtu(1500)
                 .addAddress("172.19.0.1", 30)
+                .also { if (pendingIpv6) it.addAddress("fdfe:dcba:9876::1", 126) }
                 .addRoute("0.0.0.0", 0)
                 .also { if (pendingIpv6) it.addRoute("::", 0) }
                 .addDnsServer(pendingVpnDns)
                 .also { try { it.addDisallowedApplication(packageName) } catch (_: Throwable) {} }
+                .also { applyAppRoutingRules(it) }
                 .establish()
         } catch (t: Throwable) {
             toast("establish: ${t.message}"); stopVpn(); return
@@ -120,7 +162,7 @@ class WhispVpnService : VpnService() {
         Thread({
             try {
                 Log.i(TAG, "singbox Start() fd=${pfd.fd}")
-                Singbox.start(pfd.fd, filesDir.absolutePath, if (goClientProc != null) "127.0.0.1:1080" else "", pendingConnKey, pendingRulesJson)
+                Singbox.start(pfd.fd, filesDir.absolutePath, if (goClientProc != null) "127.0.0.1:1080" else "", pendingConnKey, pendingRulesJson, pendingIpv6)
                 Log.i(TAG, "singbox running")
                 toast("VPN started")
             } catch (t: Throwable) {
@@ -129,6 +171,34 @@ class WhispVpnService : VpnService() {
                 stopVpn()
             }
         }, "singbox-start").start()
+    }
+
+    // Парсит pendingRulesJson и применяет split-tunneling для process-name правил.
+    // action=DIRECT → addDisallowedApplication: пакет обходит VPN-туннель.
+    // action=PROXY  → ничего: трафик идёт через VPN по умолчанию (disallow-mode).
+    // action=REJECT → addDisallowedApplication: обходит тоннель (блокировку на
+    //                 уровне VPN реализовать нельзя без root/nfqueue).
+    private fun applyAppRoutingRules(builder: Builder) {
+        if (pendingRulesJson.isEmpty()) return
+        try {
+            val arr = org.json.JSONArray(pendingRulesJson)
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                if (obj.optString("kind") != "process-name") continue
+                val action = obj.optString("action", "DIRECT")
+                if (action == "PROXY") continue   // уже идёт через VPN по умолчанию
+                val pkg = obj.optString("name").takeIf { it.isNotEmpty() } ?: continue
+                if (pkg == packageName) continue  // наш же пакет — уже добавлен выше
+                try {
+                    builder.addDisallowedApplication(pkg)
+                    Log.d(TAG, "appRule $action bypass: $pkg")
+                } catch (e: Exception) {
+                    Log.w(TAG, "applyAppRoutingRules: $pkg — ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "applyAppRoutingRules parse: ${e.message}")
+        }
     }
 
     private fun stopVpn() {
@@ -140,6 +210,13 @@ class WhispVpnService : VpnService() {
         tunInterface = null
         try { stopForegroundCompat() } catch (_: Throwable) {}
         stopSelf()
+    }
+
+    // App swiped away from recents — stopWithTask=false keeps the service alive
+    // under normal conditions, but some OEM ROMs kill the process anyway.
+    // Returning START_STICKY from onStartCommand handles automatic restart by the OS.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

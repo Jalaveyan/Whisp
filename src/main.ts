@@ -384,6 +384,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     socksPass: "Пароль",
     socksProxyUrl: "URL прокси",
     socksSave: "Сохранить",
+    reconnectRequired: "Переподключитесь для применения правила",
     bridgesTitle2: "Бриджи",
     bridgeRefreshTip: "Обновить",
     bridgePingAllTip: "Пинг всех",
@@ -415,6 +416,13 @@ const i18n: Record<Lang, Record<string, string>> = {
     foundPorts: "Найдено",
     openPorts: "открытых портов",
     versionAvail: "Доступна версия",
+    updateAvailableNew: "Доступно обновление",
+    upToDate: "Последняя версия установлена",
+    installUpdate: "Установить",
+    openRelease: "Открыть релиз",
+    currentVersion: "Текущая версия",
+    latestVersion: "Последняя версия",
+    releaseNotes: "Изменения",
   },
   en: {
     home: "Home", connections: "Connections", profiles: "Profiles", routing: "Routing", logs: "Logs", settings: "Settings", bridges: "Bridges", ml: "ML Mode",
@@ -652,6 +660,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     socksPass: "Password",
     socksProxyUrl: "Proxy URL",
     socksSave: "Save",
+    reconnectRequired: "Reconnect to apply the rule",
     bridgesTitle2: "Bridges",
     bridgeRefreshTip: "Refresh",
     bridgePingAllTip: "Ping all",
@@ -683,6 +692,13 @@ const i18n: Record<Lang, Record<string, string>> = {
     foundPorts: "Found",
     openPorts: "open ports",
     versionAvail: "Version available:",
+    updateAvailableNew: "Update Available",
+    upToDate: "Up to date",
+    installUpdate: "Install",
+    openRelease: "Open Release",
+    currentVersion: "Current version",
+    latestVersion: "Latest version",
+    releaseNotes: "Release notes",
   },
   zh: {
     home: "主页", connections: "连接", profiles: "配置", routing: "路由", logs: "日志", settings: "设置", bridges: "桥接", ml: "ML模式",
@@ -920,6 +936,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     socksPass: "密码",
     socksProxyUrl: "代理 URL",
     socksSave: "保存",
+    reconnectRequired: "重连以应用规则",
     bridgesTitle2: "桥接",
     bridgeRefreshTip: "刷新",
     bridgePingAllTip: "Ping全部",
@@ -951,6 +968,13 @@ const i18n: Record<Lang, Record<string, string>> = {
     foundPorts: "找到",
     openPorts: "个开放端口",
     versionAvail: "可用版本:",
+    updateAvailableNew: "有可用更新",
+    upToDate: "已是最新版本",
+    installUpdate: "安装",
+    openRelease: "打开发布",
+    currentVersion: "当前版本",
+    latestVersion: "最新版本",
+    releaseNotes: "发布说明",
   },
   fa: {
     home: "خانه", connections: "اتصالات", profiles: "پروفایل‌ها", routing: "مسیریابی", logs: "گزارش", settings: "تنظیمات", bridges: "پل‌ها", ml: "حالت ML",
@@ -1188,6 +1212,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     socksPass: "رمز عبور",
     socksProxyUrl: "آدرس پروکسی",
     socksSave: "ذخیره",
+    reconnectRequired: "برای اعمال قانون دوباره متصل شوید",
     bridgesTitle2: "پل‌ها",
     bridgeRefreshTip: "بروزرسانی",
     bridgePingAllTip: "پینگ همه",
@@ -1219,6 +1244,13 @@ const i18n: Record<Lang, Record<string, string>> = {
     foundPorts: "یافت شد",
     openPorts: "پورت باز",
     versionAvail: "نسخه موجود:",
+    updateAvailableNew: "به‌روزرسانی موجود است",
+    upToDate: "به‌روز است",
+    installUpdate: "نصب",
+    openRelease: "باز کردن انتشار",
+    currentVersion: "نسخه فعلی",
+    latestVersion: "آخرین نسخه",
+    releaseNotes: "یادداشت‌های انتشار",
   },
 };
 
@@ -1675,6 +1707,8 @@ function renderShell(): void {
     tc.className = "toast-container";
     document.body.appendChild(tc);
   }
+
+  document.body.classList.toggle("is-desktop", !isAndroid);
 
   app.innerHTML = `
     <header class="top-bar" id="top-bar">
@@ -2402,8 +2436,8 @@ function bindNodeGraphEvents(): void {
         await invoke("switch_transport", { id: sel.dataset.id!, transport: sel.value });
         showToast(`${t("transportSet")} ${sel.value}`, "success", 2000);
         setTimeout(async () => { await fetchConnections(); renderPage(); }, 1500);
-      } catch {
-        showToast(t("error") || "Transport switch failed", "error", 2500);
+      } catch (e: unknown) {
+        showToast(String(e), "error", 5000);
         await fetchConnections(); renderPage();
       }
     });
@@ -2920,8 +2954,8 @@ function bindConnectionsEvents(): void {
         await invoke("switch_transport", { id, transport: sel.value });
         showToast(`${t("transportSet")} ${sel.value}`, "success", 2000);
         setTimeout(async () => { await fetchConnections(); renderPage(); }, 1500);
-      } catch {
-        showToast(t("error") || "Transport switch failed", "error", 2500);
+      } catch (e: unknown) {
+        showToast(String(e), "error", 5000);
         await fetchConnections(); renderPage();
       }
     });
@@ -3463,7 +3497,8 @@ function bindRoutingEvents(): void {
       if (search) {
         search.value = "";
         search.oninput = () => renderProcessList(procs, inner, search.value);
-        setTimeout(() => search.focus(), 50);
+        // На Android автофокус на input открывает клавиатуру и перекрывает список
+        if (!isAndroid) setTimeout(() => search.focus(), 50);
       }
     } catch (e) {
       inner.innerHTML = `<div style="padding:16px;color:var(--danger)">${esc(String(e))}</div>`;
@@ -3503,6 +3538,7 @@ function bindRoutingEvents(): void {
     _selectedExe = "";
     const inp = document.getElementById("rule-value-input") as HTMLInputElement;
     if (inp) inp.value = "";
+    if (isAndroid && currentType === "process") showToast(t("reconnectRequired"), "info", 3500);
     renderPage();
   });
 
@@ -3739,7 +3775,22 @@ function renderSettings(): string {
       <div class="setting-row"><span class="setting-label">${t("hwid")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-hwid" ${settings.hwid ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
       <div class="setting-row"><span class="setting-label">${t("autostart")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-autostart" ${settings.auto_connect ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
       <div class="setting-row"><span class="setting-label">${t("authTip")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-authtip" ${settings.auth_tip ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
-      <div class="setting-row"><span class="setting-label">${t("update")}</span><div class="setting-value"><button class="btn-sm" id="btn-open-repo">${t("openRepo")}</button><button class="btn-sm" id="btn-check-updates">${t("checkUpdates")}</button></div></div>
+      <div class="setting-row"><span class="setting-label">${t("update")}</span><div class="setting-value"><button class="btn-sm" id="btn-open-repo">${t("openRepo")}</button></div></div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">${t("checkUpdates")}</div>
+      <div class="setting-row">
+        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+          <span class="setting-label">${t("currentVersion")}</span>
+          <span style="font-size:11px;opacity:.5">${sysInfo.version}</span>
+        </div>
+      </div>
+      <div class="setting-row" id="update-result-row" style="display:none;flex-direction:column;align-items:flex-start;gap:6px">
+        <div id="update-result-content"></div>
+      </div>
+      <div class="setting-row">
+        <button class="btn-sm" id="btn-check-updates" style="width:100%">${t("checkUpdates")}</button>
+      </div>
     </div>
     `;
   }
@@ -3829,7 +3880,22 @@ function renderSettings(): string {
       <div class="setting-row"><span class="setting-label">${t("autostart")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-autostart" ${settings.auto_connect ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
       <div class="setting-row"><span class="setting-label">${t("authTip")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-authtip" ${settings.auth_tip ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
       <div class="setting-row"><span class="setting-label">${t("config")}</span><div class="setting-value"><button class="btn-sm" id="btn-open-config">${t("open")}</button></div></div>
-      <div class="setting-row"><span class="setting-label">${t("update")}</span><div class="setting-value"><button class="btn-sm" id="btn-open-repo">${t("openRepo")}</button><button class="btn-sm" id="btn-check-updates">${t("checkUpdates")}</button></div></div>
+      <div class="setting-row"><span class="setting-label">${t("update")}</span><div class="setting-value"><button class="btn-sm" id="btn-open-repo">${t("openRepo")}</button></div></div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">${t("checkUpdates")}</div>
+      <div class="setting-row">
+        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+          <span class="setting-label">${t("currentVersion")}</span>
+          <span style="font-size:11px;opacity:.5">${sysInfo.version}</span>
+        </div>
+      </div>
+      <div class="setting-row" id="update-result-row" style="display:none;flex-direction:column;align-items:flex-start;gap:6px">
+        <div id="update-result-content"></div>
+      </div>
+      <div class="setting-row">
+        <button class="btn-sm" id="btn-check-updates" style="width:100%">${t("checkUpdates")}</button>
+      </div>
     </div>
     `;
 }
@@ -3913,21 +3979,55 @@ function bindSettingsEvents(): void {
   document.getElementById("btn-open-repo")?.addEventListener("click", () => invoke("open_url", { url: "https://github.com/Jalaveyan/Whispera" }).catch(() => { }));
   document.getElementById("btn-open-config")?.addEventListener("click", () => invoke("open_config_dir").catch(() => { }));
   document.getElementById("btn-check-updates")?.addEventListener("click", async () => {
-    // Use actual version from Rust (sysInfo.version = "v0.1.3"), strip leading "v"
-    const current = sysInfo.version.replace(/^v/, "") || "0.1.3";
+    const btn = document.getElementById("btn-check-updates") as HTMLButtonElement;
+    const row = document.getElementById("update-result-row") as HTMLElement;
+    const content = document.getElementById("update-result-content") as HTMLElement;
+    if (!btn || !row || !content) return;
+
+    btn.disabled = true;
+    btn.textContent = t("checking") + "...";
+    row.style.display = "none";
+
     try {
-      const res = await fetch("https://api.github.com/repos/Jalaveyan/Whispera/releases/latest");
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      const latest = (data.tag_name as string).replace(/^v/, "");
-      if (latest === current) {
-        showToast(t("updateAvailable"), "success", 2500);
+      const info = await invoke<{
+        tag: string; name: string; body: string;
+        html_url: string; download_url: string; is_newer: boolean;
+      }>("check_for_updates");
+
+      row.style.display = "flex";
+
+      if (info.is_newer) {
+        content.innerHTML = `
+          <div style="font-size:13px;font-weight:600;color:var(--md-primary)">${t("updateAvailableNew")}: ${esc(info.tag)}</div>
+          ${info.body ? `<div style="font-size:11px;opacity:.6;margin-top:4px;max-height:80px;overflow-y:auto;white-space:pre-wrap">${esc(info.body.slice(0, 400))}</div>` : ""}
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+            ${info.download_url ? `<button class="btn-sm" id="btn-install-update">${t("installUpdate")}</button>` : ""}
+            <button class="btn-sm" id="btn-open-release" style="opacity:.7">${t("openRelease")}</button>
+          </div>`;
+
+        document.getElementById("btn-install-update")?.addEventListener("click", async () => {
+          const b = document.getElementById("btn-install-update") as HTMLButtonElement;
+          if (b) { b.disabled = true; b.textContent = t("loading") + "..."; }
+          try {
+            await invoke("install_update", { downloadUrl: info.download_url, htmlUrl: info.html_url });
+          } catch (e) {
+            showToast(String(e), "error", 5000);
+            if (b) { b.disabled = false; b.textContent = t("installUpdate"); }
+          }
+        });
+
+        document.getElementById("btn-open-release")?.addEventListener("click", () => {
+          invoke("open_url", { url: info.html_url }).catch(() => {});
+        });
       } else {
-        showToast(`${t("versionAvail")} ${latest}`, "info", 4000);
-        invoke("open_url", { url: data.html_url }).catch(() => { });
+        content.innerHTML = `<div style="font-size:13px;color:var(--md-primary)">${t("upToDate")} (${esc(info.tag)})</div>`;
       }
-    } catch {
-      showToast(t("updateCheckFailed"), "error", 2500);
+    } catch (e) {
+      row.style.display = "flex";
+      content.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(String(e))}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = t("checkUpdates");
     }
   });
 }

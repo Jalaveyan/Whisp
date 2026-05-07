@@ -61,6 +61,23 @@ jobs:
               src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute version
+        id: ver
+        shell: bash
+        run: |
+          git fetch --tags
+          BASE="v1.0.0"
+          LAST=$(git tag -l "${BASE}.*" | sort -V | tail -n1)
+          if [ -z "$LAST" ]; then NEW="${BASE}.1"
+          else PATCH=$(echo "$LAST" | awk -F. '{print $NF}'); NEW="${BASE}.$((PATCH+1))"; fi
+          echo "tag=$NEW" >> $GITHUB_OUTPUT
+          VER="${NEW#v}"
+          jq --arg v "$VER" '.version = $v' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+          mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+          sed -i "s/^version = \".*\"/version = \"$VER\"/" src-tauri/Cargo.toml
 
       - uses: actions/setup-node@v4
         with:
@@ -167,6 +184,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute version
+        id: ver
+        shell: bash
+        run: |
+          git fetch --tags
+          BASE="v1.0.0"
+          LAST=$(git tag -l "${BASE}.*" | sort -V | tail -n1)
+          if [ -z "$LAST" ]; then NEW="${BASE}.1"
+          else PATCH=$(echo "$LAST" | awk -F. '{print $NF}'); NEW="${BASE}.$((PATCH+1))"; fi
+          echo "tag=$NEW" >> $GITHUB_OUTPUT
+          VER="${NEW#v}"
+          jq --arg v "$VER" '.version = $v' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+          mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+          sed -i "s/^version = \".*\"/version = \"$VER\"/" src-tauri/Cargo.toml
 
       - uses: actions/setup-node@v4
         with:

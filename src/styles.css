@@ -471,6 +471,11 @@ body {
 
 .key-input::placeholder { color: var(--md-outline); }
 
+.key-input::-webkit-scrollbar { width: 3px; }
+.key-input::-webkit-scrollbar-track { background: transparent; }
+.key-input::-webkit-scrollbar-thumb { background: var(--md-outline-var); border-radius: 2px; }
+.key-input { scrollbar-width: thin; scrollbar-color: var(--md-outline-var) transparent; }
+
 .key-input:focus {
   border-color: var(--md-primary);
   border-width: 2px;
@@ -2228,3 +2233,68 @@ body {
   color: var(--md-err);
 }
 .ng-btn-danger:hover { background: rgba(255, 100, 100, .25); }
+
+/* ══════════════════════════════════════════════════════════════
+   DESKTOP LAYOUT  (body.is-desktop — Windows / macOS / Linux)
+   На Android класс не добавляется, мобильный стиль не меняется.
+══════════════════════════════════════════════════════════════ */
+
+/* Центрируем иконки навбара; ограничиваем ширину чтобы не растягивались */
+body.is-desktop .bottom-nav {
+  justify-content: center;
+  gap: 0;
+  overflow: hidden;
+}
+
+body.is-desktop .bnav-item {
+  flex: 0 0 auto;
+  min-width: 88px;
+  max-width: 120px;
+  padding: 4px 12px 6px;
+}
+
+/* Контент и top-bar ограничены по ширине и центрированы */
+body.is-desktop .main-content {
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+body.is-desktop .top-bar {
+  padding-left: max(14px, calc(50% - 450px));
+  padding-right: max(12px, calc(50% - 450px));
+}
+
+/* Главный экран — 2 колонки: соединение слева, остальное справа */
+body.is-desktop .home-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto auto;
+  column-gap: 12px;
+  row-gap: 7px;
+  align-items: start;
+}
+
+body.is-desktop .home-grid > * { width: auto; }
+
+body.is-desktop .card-connection {
+  grid-column: 1;
+  grid-row: 1 / 4;
+}
+
+body.is-desktop .card-sites {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+body.is-desktop .card-ip {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+body.is-desktop .card-system {
+  grid-column: 2;
+  grid-row: 3;
+}
