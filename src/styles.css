@@ -131,37 +131,29 @@ body {
 
 #app {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   width: 100vw;
+  overflow: hidden;
 }
 
 /* ══════════════════════════════════════════════════════════════
-   NAVIGATION DRAWER  (M3)
+   TOP BAR
 ══════════════════════════════════════════════════════════════ */
-.sidebar {
-  width: var(--nav-w);
-  min-width: var(--nav-w);
-  background: var(--md-surface-low);
-  display: flex;
-  flex-direction: column;
-  padding: 14px 0 8px;
-  /* No hard border — use a subtle divider line */
-  border-right: 1px solid var(--md-outline-var);
-  position: relative;
-}
-
-/* M3 nav drawer header */
-.sidebar-logo {
-  padding: 24px 16px 20px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid var(--md-outline-var);
+.top-bar {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  height: 44px;
+  padding: 0 12px 0 14px;
+  background: var(--md-surface);
+  border-bottom: 1px solid var(--md-outline-var);
+  flex-shrink: 0;
+  z-index: 10;
 }
 
 .logo-wordmark {
-  font-size: 32px;
+  font-size: 22px;
   font-weight: 700;
   letter-spacing: 1px;
   font-style: italic;
@@ -170,12 +162,12 @@ body {
   -webkit-text-fill-color: transparent;
   background-clip: text;
   user-select: none;
+  line-height: 1;
 }
 
-/* Language toggle — M3 Segmented Button */
+/* Language toggle */
 .lang-switcher {
   display: flex;
-  margin: 10px 10px 8px;
   border: 1px solid var(--md-outline);
   border-radius: var(--s-full);
   overflow: hidden;
@@ -183,10 +175,9 @@ body {
 }
 
 .lang-btn {
-  flex: 1;
-  padding: 5px 0;
+  padding: 3px 7px;
   text-align: center;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
   font-family: var(--f);
   cursor: pointer;
@@ -195,7 +186,6 @@ body {
   color: var(--md-on-surface-var);
   transition: all var(--tr);
   letter-spacing: .5px;
-  position: relative;
 }
 
 .lang-btn.active {
@@ -209,58 +199,86 @@ body {
   color: var(--md-on-surface);
 }
 
-/* Nav items */
-.nav-items {
+/* ══════════════════════════════════════════════════════════════
+   BOTTOM NAV (horizontal scroll wheel)
+══════════════════════════════════════════════════════════════ */
+.bottom-nav {
+  display: flex;
+  align-items: stretch;
+  height: 58px;
+  flex-shrink: 0;
+  background: var(--md-surface);
+  border-top: 1px solid var(--md-outline-var);
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  z-index: 10;
+}
+.bottom-nav::-webkit-scrollbar { display: none; }
+
+.bnav-item {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  flex: 1;
-  padding: 6px 8px 0;
-}
-
-/* M3 Navigation Drawer Item — active indicator = tonal pill */
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  cursor: pointer;
-  color: var(--md-on-surface-var);
-  font-size: 13px;
-  font-weight: 500;
-  transition: background var(--tr), color var(--tr);
-  border-radius: var(--s-full);
-  position: relative;
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-/* M3 state layer on hover */
-.nav-item:hover {
-  background: rgba(255,255,255,.06);
-  color: var(--md-on-surface);
-}
-
-/* M3 active indicator */
-.nav-item.active {
-  background: var(--md-secondary-cont);
-  color: var(--md-on-primary-cont);
-  font-weight: 700;
-}
-
-.nav-item .nav-icon {
-  width: 20px;
-  display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  opacity: .9;
+  min-width: 68px;
+  gap: 3px;
+  cursor: pointer;
+  color: var(--md-on-surface-var);
+  padding: 6px 10px;
+  scroll-snap-align: start;
+  transition: background var(--tr), color var(--tr);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: 0;
+  position: relative;
 }
 
-.nav-settings {
-  margin-top: auto;
-  padding: 8px 8px 0;
-  border-top: 1px solid var(--md-outline-var);
+.bnav-item::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%) scaleX(0);
+  width: 32px;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: var(--md-primary);
+  transition: transform var(--tr);
+}
+
+.bnav-item.active {
+  color: var(--md-primary);
+  background: rgba(168, 156, 247, .08);
+}
+
+.bnav-item.active::after {
+  transform: translateX(-50%) scaleX(1);
+}
+
+.bnav-item:active {
+  background: rgba(255, 255, 255, .06);
+}
+
+.bnav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.bnav-icon svg { width: 20px; height: 20px; }
+
+.bnav-label {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -269,6 +287,7 @@ body {
 .main-content {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 10px 12px;
@@ -1824,104 +1843,14 @@ body {
 
 /* ══════════════════════════════════════════════════════════════
    MOBILE LAYOUT  (≤ 600px)
-
-   Архитектура:
-   ┌─────────────────────────────────┐
-   │ [≡]  app-bar (fixed, top)       │ ← solid bg, контент скроллится ПОД ней
-   ├─────────────────────────────────┤
-   │ main-content (padding-top: 64)  │
-   │  ┌────────────────────────────┐ │
-   │  │ card                       │ │
-   │  └────────────────────────────┘ │
-   │  ...                            │
-   └─────────────────────────────────┘
-   sidebar — fixed off-canvas, выезжает поверх app-bar по тапу на бургер.
 ══════════════════════════════════════════════════════════════ */
 
-.app-bar {
-  display: none; /* скрыта на десктопе */
-}
-
-.sidebar-overlay {
-  display: none;
-}
-
 @media (max-width: 600px) {
-  /* ── Top App Bar ──────────────────────────────────────── */
-  .app-bar {
-    display: flex;
-    align-items: center;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 56px;
-    padding: 0 8px;
-    background: var(--md-surface);
-    border-bottom: 1px solid var(--md-outline-var);
-    z-index: 200;
-  }
-
-  .burger {
-    display: flex;
-    width: 44px;
-    height: 44px;
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    border: none;
-    border-radius: 50%;
-    color: var(--md-on-surface);
-    cursor: pointer;
-    padding: 0;
-  }
-  .burger:active {
-    background: var(--md-secondary-cont);
-  }
-  .burger svg {
-    width: 24px;
-    height: 24px;
-  }
-
-  /* ── Off-canvas Drawer ───────────────────────────────── */
-  .sidebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    height: 100vh;
-    z-index: 250; /* поверх app-bar */
-    transform: translateX(-100%);
-    transition: transform var(--tr);
-  }
-
-  .sidebar.open {
-    transform: translateX(0);
-  }
-
-  .sidebar-overlay {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 240;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity var(--tr);
-  }
-
-  .sidebar-overlay.open {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  /* ── Контент — отступ под app-bar ─────────────────────── */
   .main-content {
-    padding: 64px 10px 10px;
+    padding: 8px 10px 10px;
     width: 100vw;
   }
 
-  /* Page title — без хака под бургер, app-bar его прикроет.
-     16px — чтобы не доминировать над card-title (10px uppercase) + кнопками. */
   .page-title {
     padding-left: 0;
     font-size: 16px;

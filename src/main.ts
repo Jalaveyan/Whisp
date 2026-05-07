@@ -1619,115 +1619,43 @@ function renderShell(): void {
   }
 
   app.innerHTML = `
-    <header class="app-bar" id="app-bar">
-      <button class="burger" id="burger" aria-label="Menu">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <line x1="4" y1="7"  x2="20" y2="7"/>
-          <line x1="4" y1="12" x2="20" y2="12"/>
-          <line x1="4" y1="17" x2="20" y2="17"/>
-        </svg>
-      </button>
-    </header>
-    <div class="sidebar-overlay" id="sidebar-overlay"></div>
-    <nav class="sidebar" id="sidebar">
-      <div class="sidebar-logo">
-        <span class="logo-wordmark">whisp</span>
-      </div>
+    <header class="top-bar" id="top-bar">
+      <span class="logo-wordmark">whisp</span>
       <div class="lang-switcher" id="lang-sw"></div>
-      <div class="nav-items" id="nav-items"></div>
-      <div class="nav-settings" id="nav-settings"></div>
-    </nav>
+    </header>
     <div class="main-content" id="main-content"></div>
+    <nav class="bottom-nav" id="bottom-nav"></nav>
   `;
-
-  const sidebar = document.getElementById("sidebar");
-  const overlay = document.getElementById("sidebar-overlay");
-  const burger = document.getElementById("burger");
-  const closeDrawer = () => {
-    sidebar?.classList.remove("open");
-    overlay?.classList.remove("open");
-  };
-  const openDrawer = () => {
-    sidebar?.classList.add("open");
-    overlay?.classList.add("open");
-  };
-  burger?.addEventListener("click", openDrawer);
-  overlay?.addEventListener("click", closeDrawer);
-
-  // Swipe-from-edge: тач, начинающийся в первых 50px слева, открывает drawer.
-  // Тач на drawer'е, который двигается влево больше 60px, — закрывает.
-  // touchmove слушается с passive:false чтобы вызвать preventDefault() и не
-  // дать системе Android перехватить горизонтальный жест как «назад».
-  let touchStartX = 0;
-  let touchStartY = 0;
-  let touchMode: "open" | "close" | null = null;
-  document.addEventListener("touchstart", (e) => {
-    const t = e.touches[0];
-    if (!t) return;
-    const drawerOpen = sidebar?.classList.contains("open") ?? false;
-    if (!drawerOpen && t.clientX < 50) {
-      touchStartX = t.clientX;
-      touchStartY = t.clientY;
-      touchMode = "open";
-    } else if (drawerOpen && t.clientX < 280) {
-      touchStartX = t.clientX;
-      touchStartY = t.clientY;
-      touchMode = "close";
-    } else {
-      touchMode = null;
-    }
-  }, { passive: true });
-  document.addEventListener("touchmove", (e) => {
-    if (!touchMode) return;
-    const t = e.touches[0];
-    if (!t) return;
-    const dx = t.clientX - touchStartX;
-    const dy = Math.abs(t.clientY - touchStartY);
-    // Если жест стал вертикальным — отменяем режим, не блокируем скролл.
-    if (dy > Math.abs(dx) * 0.5) { touchMode = null; return; }
-    // Горизонтальный жест подтверждён — блокируем системный перехват.
-    if (Math.abs(dx) > 8) e.preventDefault();
-  }, { passive: false });
-  document.addEventListener("touchend", (e) => {
-    if (!touchMode) return;
-    const t = e.changedTouches[0];
-    if (!t) { touchMode = null; return; }
-    const dx = t.clientX - touchStartX;
-    const dy = Math.abs(t.clientY - touchStartY);
-    if (dy > Math.abs(dx) * 0.5) { touchMode = null; return; }
-    if (touchMode === "open" && dx > 60) openDrawer();
-    if (touchMode === "close" && dx < -60) closeDrawer();
-    touchMode = null;
-  });
 
   renderNav();
   renderPage();
 }
 
 function renderNav(): void {
-  const navItems = document.getElementById("nav-items")!;
-  const navSettings = document.getElementById("nav-settings")!;
+  const nav = document.getElementById("bottom-nav")!;
   const langSw = document.getElementById("lang-sw")!;
 
   const routeIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v3a3 3 0 0 0 3 3h6"/></svg>`;
   const items: { id: Page; icon: string; label: string }[] = [
-    { id: "home", icon: ICONS.home, label: t("home") },
-    { id: "connections", icon: ICONS.wifi, label: t("connections") },
-    { id: "profiles", icon: ICONS.user, label: t("profiles") },
-    { id: "routing", icon: routeIcon, label: t("routing") },
-    { id: "bridges", icon: ICONS.globe, label: t("bridges") },
-    { id: "logs", icon: ICONS.log, label: t("logs") },
+    { id: "home",        icon: ICONS.home,     label: t("home") },
+    { id: "connections", icon: ICONS.wifi,     label: t("connections") },
+    { id: "profiles",   icon: ICONS.user,     label: t("profiles") },
+    { id: "routing",    icon: routeIcon,      label: t("routing") },
+    { id: "bridges",    icon: ICONS.globe,    label: t("bridges") },
+    { id: "logs",       icon: ICONS.log,      label: t("logs") },
+    { id: "settings",   icon: ICONS.settings, label: t("settings") },
   ];
 
-  navItems.innerHTML = items.map(n =>
-    `<div class="nav-item ${currentPage === n.id ? "active" : ""}" data-page="${n.id}">
-      <span class="nav-icon">${n.icon}</span>${n.label}
+  nav.innerHTML = items.map(n =>
+    `<div class="bnav-item${currentPage === n.id ? " active" : ""}" data-page="${n.id}">
+      <span class="bnav-icon">${n.icon}</span>
+      <span class="bnav-label">${n.label}</span>
     </div>`
   ).join("");
 
-  navSettings.innerHTML = `<div class="nav-item ${currentPage === "settings" ? "active" : ""}" data-page="settings">
-    <span class="nav-icon">${ICONS.settings}</span>${t("settings")}
-  </div>`;
+  // Scroll active item into view
+  const active = nav.querySelector<HTMLElement>(".bnav-item.active");
+  active?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
 
   langSw.innerHTML = `
     <button class="lang-btn ${lang === "ru" ? "active" : ""}" data-lang="ru">RU</button>
@@ -1736,11 +1664,9 @@ function renderNav(): void {
     <button class="lang-btn ${lang === "fa" ? "active" : ""}" data-lang="fa">FA</button>
   `;
 
-  document.querySelectorAll<HTMLElement>(".nav-item[data-page]").forEach(el => {
+  nav.querySelectorAll<HTMLElement>(".bnav-item[data-page]").forEach(el => {
     el.addEventListener("click", () => {
       currentPage = el.dataset.page as Page;
-      document.getElementById("sidebar")?.classList.remove("open");
-      document.getElementById("sidebar-overlay")?.classList.remove("open");
       renderNav();
       renderPage();
     });
