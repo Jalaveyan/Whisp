@@ -256,6 +256,7 @@ jobs:
           gomobile bind \
             -target=android/arm64 \
             -androidapi=21 \
+            -tags with_gvisor \
             -o ../src-tauri/gen/android/app/libs/singbox.aar \
             .
           ls -lh ../src-tauri/gen/android/app/libs/singbox.aar
