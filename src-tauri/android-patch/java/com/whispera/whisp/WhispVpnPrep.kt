@@ -100,9 +100,9 @@ object WhispVpnPrep {
                 ctx.startActivity(intent)
             }
             "ok"
-        } catch (e: Exception) {
-            Log.e("WhispVpnPrep", "installCaCert KeyChain failed", e)
-            if (savedPath != null) "saved:$savedPath" else "error:${e.message}"
+        } catch (t: Throwable) {
+            Log.e("WhispVpnPrep", "installCaCert KeyChain failed", t)
+            if (savedPath != null) "saved:$savedPath" else "error:${t.message}"
         }
     }
 
@@ -145,8 +145,8 @@ object WhispVpnPrep {
                 file.writeBytes(certDer)
                 file.absolutePath
             }
-        } catch (e: Exception) {
-            Log.e("WhispVpnPrep", "saveCertToDownloads failed", e)
+        } catch (t: Throwable) {
+            Log.e("WhispVpnPrep", "saveCertToDownloads failed", t)
             null
         }
     }
