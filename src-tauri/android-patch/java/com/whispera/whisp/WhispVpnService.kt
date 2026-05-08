@@ -177,7 +177,6 @@ class WhispVpnService : VpnService() {
                 Singbox.start(pfd.fd, filesDir.absolutePath, if (goClientProc != null) "127.0.0.1:1080" else "", pendingConnKey, pendingRulesJson, pendingIpv6)
                 Log.i(TAG, "singbox running")
                 didConnect = true
-                postEvent("Whisp VPN", "Подключено")
                 toast("VPN started")
             } catch (t: Throwable) {
                 Log.e(TAG, "singbox FATAL: ${t.stackTraceToString()}")
@@ -308,7 +307,7 @@ class WhispVpnService : VpnService() {
             @Suppress("DEPRECATION") Notification.Builder(this)
         return builder
             .setContentTitle("Whisp VPN")
-            .setContentText("Connected")
+            .setContentText("VPN активен")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)
             .build()
