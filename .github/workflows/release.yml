@@ -134,6 +134,9 @@ jobs:
         if: matrix.runner != 'windows-latest'
         run: chmod +x src-tauri/binaries/*
 
+      - name: Install frontend deps
+        run: npm ci
+
       - name: Generate icon.icns
         if: matrix.runner != 'windows-latest'
         shell: bash
@@ -152,28 +155,10 @@ jobs:
             iconutil -c icns "$ICONSET" -o "$OUT"
           else
             python3 -m pip install --quiet --user Pillow
-            python3 - "$SRC" "$OUT" <<'PY'
-import sys, struct, io, pathlib
-from PIL import Image
-src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-img = Image.open(src)
-entries = []
-for size, tag in [(256, b'ic08'), (512, b'ic09'), (1024, b'ic10')]:
-    buf = io.BytesIO()
-    img.resize((size, size), Image.LANCZOS).save(buf, 'PNG')
-    entries.append((tag, buf.getvalue()))
-total = 8 + sum(8 + len(d) for _, d in entries)
-blob = b'icns' + struct.pack('>I', total)
-for tag, data in entries:
-    blob += tag + struct.pack('>I', 8 + len(data)) + data
-out.write_bytes(blob)
-print(f"Generated {out} ({len(blob)} bytes)")
-PY
+            python3 -c "from PIL import Image; Image.open('$SRC').resize((1024,1024), Image.LANCZOS).save('/tmp/icon-1024.png')"
+            npx tauri icon /tmp/icon-1024.png
           fi
           ls -la "$OUT"
-
-      - name: Install frontend deps
-        run: npm ci
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
