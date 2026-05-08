@@ -34,6 +34,7 @@ class WhispVpnService : VpnService() {
     }
 
     @Volatile private var didConnect = false
+    private val stopping = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private var tunInterface: ParcelFileDescriptor? = null
     private var goClientProc: Process? = null
@@ -114,6 +115,8 @@ class WhispVpnService : VpnService() {
     }
 
     private fun startVpnSafe() {
+        stopping.set(false)
+        didConnect = false
         toast("starting")
 
         if (VpnService.prepare(this) != null) {
@@ -162,7 +165,8 @@ class WhispVpnService : VpnService() {
                         try { val buf = ByteArray(8192); while (stream.read(buf) != -1) {} } catch (_: Throwable) {}
                     }, "goclient-drain").apply { isDaemon = true }.start()
                 }
-                Thread.sleep(800)
+                val ready = waitForPort("127.0.0.1", 1080, 4000)
+                if (!ready) Log.w(TAG, "go-client did not bind on :1080 within 4s")
                 toast("go-client started")
             } catch (t: Throwable) {
                 toast("go-client failed: ${t.message}")
@@ -216,6 +220,10 @@ class WhispVpnService : VpnService() {
     }
 
     private fun stopVpn() {
+        if (!stopping.compareAndSet(false, true)) {
+            Log.w(TAG, "stopVpn: already stopping, skipping")
+            return
+        }
         Log.i(TAG, "stopVpn")
         try { Singbox.stop() } catch (_: Throwable) {}
         goClientProc?.destroy()
@@ -223,7 +231,17 @@ class WhispVpnService : VpnService() {
         try { tunInterface?.close() } catch (_: Throwable) {}
         tunInterface = null
         try { stopForegroundCompat() } catch (_: Throwable) {}
+        stopping.set(false)
         stopSelf()
+    }
+
+    private fun waitForPort(host: String, port: Int, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            try { java.net.Socket(host, port).use { return true } } catch (_: Exception) {}
+            Thread.sleep(50)
+        }
+        return false
     }
 
     // App swiped away from recents — stopWithTask=false keeps the service alive
