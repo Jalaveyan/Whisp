@@ -5,12 +5,14 @@
 //!
 //! Возвращаем (package_name, label) — package для mihomo PROCESS-NAME,
 //! label для отображения юзеру.
+//!
+//! Используем queryIntentActivities(ACTION_MAIN + CATEGORY_LAUNCHER) вместо
+//! getInstalledApplications, чтобы получить ровно те приложения, которые
+//! видны пользователю в лаунчере — без системных сервисов и фреймворков.
 
 use jni::objects::{JObject, JValue};
 use jni::JavaVM;
-
-const FLAG_SYSTEM: i32 = 1; // ApplicationInfo.FLAG_SYSTEM
-const FLAG_UPDATED_SYSTEM_APP: i32 = 0x00000080;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct InstalledApp {
@@ -32,59 +34,86 @@ pub fn list_user_packages() -> Result<Vec<InstalledApp>, String> {
 
     // PackageManager pm = context.getPackageManager();
     let pm = env
-        .call_method(
-            &context,
-            "getPackageManager",
-            "()Landroid/content/pm/PackageManager;",
-            &[],
-        )
+        .call_method(&context, "getPackageManager", "()Landroid/content/pm/PackageManager;", &[])
         .and_then(|v| v.l())
         .map_err(|e| format!("getPackageManager: {}", e))?;
 
-    // List<ApplicationInfo> apps = pm.getInstalledApplications(0);
-    let apps_list = env
+    // Intent intent = new Intent("android.intent.action.MAIN");
+    let intent_class = env
+        .find_class("android/content/Intent")
+        .map_err(|e| format!("find_class Intent: {}", e))?;
+    let action = env
+        .new_string("android.intent.action.MAIN")
+        .map_err(|e| format!("new_string action: {}", e))?;
+    let intent = env
+        .new_object(&intent_class, "(Ljava/lang/String;)V", &[JValue::Object(&action)])
+        .map_err(|e| format!("new Intent: {}", e))?;
+
+    // intent.addCategory("android.intent.category.LAUNCHER");
+    let category = env
+        .new_string("android.intent.category.LAUNCHER")
+        .map_err(|e| format!("new_string category: {}", e))?;
+    env.call_method(
+        &intent,
+        "addCategory",
+        "(Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(&category)],
+    )
+    .map_err(|e| format!("addCategory: {}", e))?;
+
+    // List<ResolveInfo> list = pm.queryIntentActivities(intent, 0);
+    let list = env
         .call_method(
             &pm,
-            "getInstalledApplications",
-            "(I)Ljava/util/List;",
-            &[JValue::Int(0)],
+            "queryIntentActivities",
+            "(Landroid/content/Intent;I)Ljava/util/List;",
+            &[JValue::Object(&intent), JValue::Int(0)],
         )
         .and_then(|v| v.l())
-        .map_err(|e| format!("getInstalledApplications: {}", e))?;
+        .map_err(|e| format!("queryIntentActivities: {}", e))?;
 
     let size = env
-        .call_method(&apps_list, "size", "()I", &[])
+        .call_method(&list, "size", "()I", &[])
         .and_then(|v| v.i())
         .map_err(|e| format!("List.size: {}", e))?;
 
     let mut out = Vec::with_capacity(size as usize);
+    let mut seen: HashSet<String> = HashSet::new();
+
     for i in 0..size {
-        let app_info = env
-            .call_method(&apps_list, "get", "(I)Ljava/lang/Object;", &[JValue::Int(i)])
+        let resolve_info = env
+            .call_method(&list, "get", "(I)Ljava/lang/Object;", &[JValue::Int(i)])
             .and_then(|v| v.l())
             .map_err(|e| format!("List.get({}): {}", i, e))?;
 
-        // ApplicationInfo.flags — отфильтровать system apps.
-        let flags = env
-            .get_field(&app_info, "flags", "I")
-            .and_then(|v| v.i())
-            .unwrap_or(0);
-        if (flags & FLAG_SYSTEM) != 0 && (flags & FLAG_UPDATED_SYSTEM_APP) == 0 {
-            continue; // pure system app — пропускаем
-        }
-
-        // ApplicationInfo.packageName — public field
-        let pkg_obj = env
-            .get_field(&app_info, "packageName", "Ljava/lang/String;")
+        // ResolveInfo.activityInfo (ActivityInfo extends ComponentInfo extends PackageItemInfo)
+        let activity_info = env
+            .get_field(&resolve_info, "activityInfo", "Landroid/content/pm/ActivityInfo;")
             .and_then(|v| v.l())
-            .map_err(|e| format!("packageName: {}", e))?;
+            .map_err(|e| format!("activityInfo[{}]: {}", i, e))?;
+
+        // ComponentInfo.packageName
+        let pkg_obj = env
+            .get_field(&activity_info, "packageName", "Ljava/lang/String;")
+            .and_then(|v| v.l())
+            .map_err(|e| format!("packageName[{}]: {}", i, e))?;
         let pkg: String = env
             .get_string(&pkg_obj.into())
-            .map_err(|e| format!("packageName get_string: {}", e))?
+            .map_err(|e| format!("packageName get_string[{}]: {}", i, e))?
             .into();
 
-        // CharSequence label = pm.getApplicationLabel(appInfo);
-        let label_obj = env
+        if !seen.insert(pkg.clone()) {
+            continue; // одно приложение может иметь несколько launcher-активностей
+        }
+
+        // ComponentInfo.applicationInfo
+        let app_info = env
+            .get_field(&activity_info, "applicationInfo", "Landroid/content/pm/ApplicationInfo;")
+            .and_then(|v| v.l())
+            .map_err(|e| format!("applicationInfo[{}]: {}", i, e))?;
+
+        // pm.getApplicationLabel(applicationInfo).toString()
+        let label_cs = env
             .call_method(
                 &pm,
                 "getApplicationLabel",
@@ -92,15 +121,14 @@ pub fn list_user_packages() -> Result<Vec<InstalledApp>, String> {
                 &[JValue::Object(&app_info)],
             )
             .and_then(|v| v.l())
-            .map_err(|e| format!("getApplicationLabel: {}", e))?;
-        // label.toString()
+            .map_err(|e| format!("getApplicationLabel[{}]: {}", i, e))?;
         let label_str = env
-            .call_method(&label_obj, "toString", "()Ljava/lang/String;", &[])
+            .call_method(&label_cs, "toString", "()Ljava/lang/String;", &[])
             .and_then(|v| v.l())
-            .map_err(|e| format!("toString: {}", e))?;
+            .map_err(|e| format!("label.toString[{}]: {}", i, e))?;
         let label: String = env
             .get_string(&label_str.into())
-            .map_err(|e| format!("label get_string: {}", e))?
+            .map_err(|e| format!("label get_string[{}]: {}", i, e))?
             .into();
 
         out.push(InstalledApp { package: pkg, label });
