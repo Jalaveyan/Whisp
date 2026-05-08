@@ -2032,6 +2032,40 @@ const TRANSPORTS = ["tcp","udp","websocket","quic","h2c","obfs4","shadowsocks","
   "meek","snowflake","domainfront","splithttp","httpupgrade","tgbot","vkwebrtc","vkbot","okwebrtc",
   "yacloud","yadisk","yatelemost","mirage","mtproto"];
 
+function wireTransportCS(): void {
+  document.querySelectorAll<HTMLElement>(".conn-transport-cs").forEach(cs => {
+    const trigger = cs.querySelector<HTMLElement>(".custom-select-trigger");
+    trigger?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.querySelectorAll<HTMLElement>(".conn-transport-cs.open").forEach(o => {
+        if (o !== cs) o.classList.remove("open");
+      });
+      cs.classList.toggle("open");
+    });
+    cs.querySelectorAll<HTMLElement>(".custom-select-option").forEach(opt => {
+      opt.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const id = cs.dataset.id!;
+        const transport = opt.dataset.value!;
+        cs.dataset.value = transport;
+        cs.classList.remove("open");
+        const label = cs.querySelector(".custom-select-label");
+        if (label) label.textContent = transport;
+        cs.querySelectorAll(".custom-select-option").forEach(o => o.classList.remove("selected"));
+        opt.classList.add("selected");
+        try {
+          await invoke("switch_transport", { id, transport });
+          showToast(`${t("transportSet")} ${transport}`, "success", 2000);
+          setTimeout(async () => { await fetchConnections(); renderPage(); }, 1500);
+        } catch (err: unknown) {
+          showToast(String(err), "error", 5000);
+          await fetchConnections(); renderPage();
+        }
+      });
+    });
+  });
+}
+
 function marionetteProfileOpts(current?: string): string {
   const profiles = [
     { value: "",              label: t("profileNone") },
@@ -2072,7 +2106,7 @@ function renderConnectionCard(c: ConnectionEntry): string {
     : t("connStatusOff");
   const expanded = connectionsExpanded.has(c.id);
   const transportOpts = TRANSPORTS.map(tr =>
-    `<option value="${tr}" ${c.transport === tr ? "selected" : ""}>${tr}</option>`
+    `<div class="custom-select-option${c.transport === tr ? " selected" : ""}" data-value="${tr}">${tr}</div>`
   ).join("");
 
   const speedBadge = c.rate_limit_kb > 0
@@ -2090,11 +2124,13 @@ function renderConnectionCard(c: ConnectionEntry): string {
     <div class="card-header" style="cursor:pointer" data-expand="${esc(c.id)}">
       <span class="card-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span class="${stCls}" style="font-size:11px;padding:2px 7px">${stTxt}</span>
-        <select class="conn-transport-inline input-sm" data-id="${esc(c.id)}"
-          onclick="event.stopPropagation()"
-          style="font-size:12px;font-weight:600;background:transparent;border:1px solid var(--border);border-radius:4px;padding:1px 4px;color:inherit;max-width:130px">
-          ${transportOpts}
-        </select>
+        <div class="custom-select conn-transport-cs" data-id="${esc(c.id)}" data-value="${esc(c.transport)}"
+          onclick="event.stopPropagation()" style="max-width:130px;flex-shrink:0">
+          <div class="custom-select-trigger">
+            <span class="custom-select-label">${esc(c.transport)}</span><span class="arrow">▾</span>
+          </div>
+          <div class="custom-select-options">${transportOpts}</div>
+        </div>
         <span style="opacity:.55;font-size:12px">${esc(c.server)}</span>
         ${c.key_index !== undefined ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--accent-muted,#3d3d6b);color:var(--accent,#a78bfa)">key ${c.key_index + 1}</span>` : ""}
         ${speedBadge}${sniBadge}${bridgeBadge}
@@ -2234,7 +2270,7 @@ function renderNodeGraph(): string {
     const hasOuter = !!c.encapsulated_in;
     const portY = Math.round(NG_H / 2) - NG_PORT_R;
     const transportOpts = TRANSPORTS.map(tr =>
-      `<option value="${tr}" ${c.transport === tr ? "selected" : ""}>${tr}</option>`
+      `<div class="custom-select-option${c.transport === tr ? " selected" : ""}" data-value="${tr}">${tr}</div>`
     ).join("");
 
     return `
@@ -2249,10 +2285,13 @@ function renderNodeGraph(): string {
 
       <div class="ng-node-hdr" data-ng-drag="${esc(c.id)}">
         <span class="ng-dot" style="background:${dotColor};flex-shrink:0"></span>
-        <select class="ng-sel conn-transport-inline" data-id="${esc(c.id)}"
+        <div class="custom-select ng-sel conn-transport-cs" data-id="${esc(c.id)}" data-value="${esc(c.transport)}"
           onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
-          ${transportOpts}
-        </select>
+          <div class="custom-select-trigger">
+            <span class="custom-select-label">${esc(c.transport)}</span><span class="arrow">▾</span>
+          </div>
+          <div class="custom-select-options">${transportOpts}</div>
+        </div>
         <span class="ng-id" title="${esc(c.id)}">${c.id.length > 9 ? c.id.slice(0, 9) + "…" : esc(c.id)}</span>
         <label class="ng-toggle-mini" onmousedown="event.stopPropagation()" title="${t("nodeEnableDisable")}">
           <input type="checkbox" class="conn-toggle" data-id="${esc(c.id)}" ${c.enabled ? "checked" : ""}>
@@ -2451,18 +2490,7 @@ function bindNodeGraphEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLSelectElement>(".conn-transport-inline").forEach(sel => {
-    sel.addEventListener("change", async () => {
-      try {
-        await invoke("switch_transport", { id: sel.dataset.id!, transport: sel.value });
-        showToast(`${t("transportSet")} ${sel.value}`, "success", 2000);
-        setTimeout(async () => { await fetchConnections(); renderPage(); }, 1500);
-      } catch (e: unknown) {
-        showToast(String(e), "error", 5000);
-        await fetchConnections(); renderPage();
-      }
-    });
-  });
+  wireTransportCS();
 
   document.querySelectorAll<HTMLButtonElement>(".conn-speed-apply").forEach(btn => {
     btn.addEventListener("click", async () => {
@@ -2966,21 +2994,7 @@ function bindConnectionsEvents(): void {
     });
   });
 
-  document.querySelectorAll<HTMLSelectElement>(".conn-transport-inline").forEach(sel => {
-    sel.addEventListener("change", async () => {
-      const id = sel.dataset.id!;
-      const btn = sel.closest(".conn-entry")?.querySelector<HTMLButtonElement>(".conn-transport-apply");
-      if (btn) btn.textContent = "…";
-      try {
-        await invoke("switch_transport", { id, transport: sel.value });
-        showToast(`${t("transportSet")} ${sel.value}`, "success", 2000);
-        setTimeout(async () => { await fetchConnections(); renderPage(); }, 1500);
-      } catch (e: unknown) {
-        showToast(String(e), "error", 5000);
-        await fetchConnections(); renderPage();
-      }
-    });
-  });
+  wireTransportCS();
 
   document.querySelectorAll<HTMLButtonElement>(".conn-close-quick").forEach(btn => {
     btn.addEventListener("click", async () => {
@@ -5438,6 +5452,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   loadLang(); loadProfiles();
   await loadSettings();
   initNotifications().catch(() => {});
+  document.addEventListener("click", () => {
+    document.querySelectorAll<HTMLElement>(".conn-transport-cs.open").forEach(cs => cs.classList.remove("open"));
+  });
   _mlTargetServer = localStorage.getItem("ml_target_server") || settings.ml_server || "";
   await Promise.all([
     loadSubscriptions(),

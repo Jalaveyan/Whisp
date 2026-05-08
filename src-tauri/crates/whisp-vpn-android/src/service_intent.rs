@@ -260,20 +260,35 @@ pub fn install_ca_cert_android(cert_der: &[u8]) -> Result<Option<String>, String
     let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {}", e))?;
     let context = unsafe { JObject::from_raw(ctx_ptr as jni::sys::jobject) };
 
-    let prep_class = env
-        .find_class("com/whispera/whisp/WhispVpnPrep")
-        .map_err(|e| format!("find WhispVpnPrep: {}", e))?;
+    let app_loader = env
+        .call_method(&context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .and_then(|v| v.l())
+        .map_err(|e| format!("getClassLoader: {}", e))?;
+    let cls_name = env
+        .new_string(PREP_CLASS.replace('/', "."))
+        .map_err(|e| format!("new_string cls_name: {}", e))?;
+    let prep_cls_obj = env
+        .call_method(
+            &app_loader,
+            "loadClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[JValue::Object(&cls_name.into())],
+        )
+        .and_then(|v| v.l())
+        .map_err(|e| format!("loadClass {}: {}", PREP_CLASS, e))?;
+    let prep_class: jni::objects::JClass = prep_cls_obj.into();
 
     let cert_jarray = env
         .byte_array_from_slice(cert_der)
         .map_err(|e| format!("byte_array_from_slice: {}", e))?;
+    let cert_jobj: JObject = cert_jarray.into();
 
     let result_obj = env
         .call_static_method(
             &prep_class,
             "installCaCert",
             "(Landroid/content/Context;[B)Ljava/lang/String;",
-            &[JValue::Object(&context), JValue::Object(&cert_jarray.into())],
+            &[JValue::Object(&context), JValue::Object(&cert_jobj)],
         )
         .and_then(|v| v.l())
         .map_err(|e| format!("installCaCert: {}", e))?;
