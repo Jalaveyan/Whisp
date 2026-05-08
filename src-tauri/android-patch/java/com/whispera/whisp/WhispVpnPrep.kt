@@ -8,6 +8,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.Settings
 import android.security.KeyChain
 import android.util.Log
 
@@ -81,9 +82,20 @@ object WhispVpnPrep {
         val savedPath = saveCertToDownloads(ctx, certDer)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ (API 30+): KeyChain.createInstallIntent() blocks CA cert installation
-            // User must install manually via Settings → Security → Install certificate
-            return if (savedPath != null) "saved:$savedPath" else "error:Failed to save cert to Downloads"
+            // Android 11+ (API 30+): KeyChain.createInstallIntent() blocks CA cert installation.
+            // Save file + open Security Settings so user just taps Install certificate → CA certificate.
+            if (savedPath != null) {
+                try {
+                    val intent = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    ctx.startActivity(intent)
+                } catch (t: Throwable) {
+                    Log.w("WhispVpnPrep", "open security settings failed", t)
+                }
+                return "saved:$savedPath"
+            }
+            return "error:Failed to save cert to Downloads"
         }
 
         // Android < 11: try KeyChain install intent from activity context if available
