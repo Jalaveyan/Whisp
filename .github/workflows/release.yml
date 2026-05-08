@@ -305,11 +305,14 @@ jobs:
 
       - name: Build Tauri Android APK (debug, auto-signed)
         id: tauri_build
-        continue-on-error: true
         run: |
           export NDK_HOME="$ANDROID_NDK_HOME"
+          set +e
           npx tauri android build --apk --debug --target aarch64 --verbose > tauri-build.log 2>&1
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
+          BUILD_EXIT=$?
+          set -e
+          echo "exit_code=$BUILD_EXIT" >> $GITHUB_OUTPUT
+          exit $BUILD_EXIT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -322,7 +325,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Show build errors
-        if: always()
+        if: failure()
         run: |
           if [ ! -f tauri-build.log ]; then echo "no build log"; exit 0; fi
           echo "##### FAILURE context (±20 lines) #####"
@@ -334,16 +337,18 @@ jobs:
           echo "##### tail 400 #####"
           tail -400 tauri-build.log
 
-      - name: Fail if build failed
-        if: steps.tauri_build.outputs.exit_code != '0'
-        run: exit 1
+      - name: Locate APK
+        run: |
+          echo "=== APK files found ==="
+          find src-tauri/gen/android -name "*.apk" 2>/dev/null || echo "(none)"
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
           name: whisp-android-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          path: src-tauri/gen/android/**/*.apk
           retention-days: 5
+          if-no-files-found: warn
 
 # ── GitHub Release ─────────────────────────────────────────────────────────
   release:
