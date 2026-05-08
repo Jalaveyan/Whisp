@@ -3949,10 +3949,9 @@ function bindSettingsEvents(): void {
       .catch((e: unknown) => {
         const msg = String(e);
         if (msg.startsWith("ca_saved_to_downloads:")) {
-          const path = msg.slice("ca_saved_to_downloads:".length);
           showToast(
-            `CA сохранён: ${path}\nНастройки → Безопасность → Установить сертификат → Файл сертификата CA`,
-            "info", 12000
+            "CA сохранён в Загрузки. Настройки открыты → Безопасность → Установить сертификат → Файл сертификата CA → whisp-ca.crt",
+            "info", 15000
           );
         } else {
           showToast(msg, "error", 5000);
