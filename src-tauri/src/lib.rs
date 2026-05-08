@@ -1602,8 +1602,10 @@ async fn save_routing_rules(app: tauri::AppHandle, rules: Vec<RoutingRule>) -> R
 }
 
 /// Regenerate mihomo config with current settings (incl. tls_fingerprint) and hot-reload via external controller.
+/// On Android mihomo does not run — fingerprint is saved and picked up by go-client on next connect.
 #[tauri::command]
 async fn apply_tls_fingerprint(app: tauri::AppHandle) -> Result<(), String> {
+    if cfg!(target_os = "android") { return Ok(()); }
     let settings = get_app_settings(app.clone())?;
     let config_path = mihomo_config_path(&app);
     let socks_addr = if settings.socks_addr.contains(':') {
