@@ -1880,6 +1880,8 @@ async fn fetch_sub_url(url: &str) -> Result<SubscriptionEntry, String> {
     validate_subscription_url(url)?;
     let client = reqwest::Client::builder()
         .min_tls_version(reqwest::tls::Version::TLS_1_2)
+        // Subscription servers often use self-signed certs on raw IP addresses.
+        .danger_accept_invalid_certs(true)
         .timeout(Duration::from_secs(12))
         .redirect(reqwest::redirect::Policy::none())
         .build()
