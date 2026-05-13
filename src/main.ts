@@ -1389,8 +1389,7 @@ function getServerBaseURL(): string {
       const u = new URL(key);
       const host = u.hostname;
       if (!host || host.includes("=") || (host.length > 40 && !host.includes("."))) return "";
-      const scheme = u.port === "443" || u.port === "" ? "https" : "http";
-      return `${scheme}://${u.host}`;
+      return `https://${u.host}`;
     } catch { return ""; }
   }
   return "";
@@ -1541,6 +1540,7 @@ async function doConnect(): Promise<void> {
     isConnected = true;
     connectTime = Date.now();
     addLog("✓ " + msg);
+    startLogPolling();
     playConnectSound();
     try { _appliedMlTransport = await invoke<string>("get_ml_transport"); } catch { _appliedMlTransport = ""; }
     const transportMsg = _appliedMlTransport
@@ -1584,6 +1584,7 @@ async function doDisconnect(): Promise<void> {
     const msg = await invoke<string>("disconnect");
     isConnected = false;
     connectTime = null;
+    stopLogPolling();
     addLog("○ " + msg);
     showToast(t("vpnDisconnected"), "info");
     if (!isAndroid) osNotify("Whisp VPN", t("vpnDisconnected"));
@@ -2814,8 +2815,13 @@ function renderConnections(): string {
 
 function bindConnectionsEvents(): void {
   document.getElementById("btn-refresh-conns")?.addEventListener("click", async () => {
-    await fetchConnections();
-    renderPage();
+    const btn = document.getElementById("btn-refresh-conns") as HTMLButtonElement | null;
+    if (btn) btn.disabled = true;
+    await Promise.all([fetchConnections(), fetchAgentStats(), fetchP2PStatus()]);
+    if (btn) btn.disabled = false;
+    const main = document.getElementById("main-content")!;
+    main.innerHTML = renderConnections();
+    bindConnectionsEvents();
   });
 
   document.getElementById("btn-encapsulate")?.addEventListener("click", async () => {
@@ -2842,7 +2848,9 @@ function bindConnectionsEvents(): void {
 
   document.getElementById("btn-agent-refresh")?.addEventListener("click", async () => {
     await fetchAgentStats();
-    renderPage();
+    const main = document.getElementById("main-content")!;
+    main.innerHTML = renderConnections();
+    bindConnectionsEvents();
   });
 
   // P2P panel events
@@ -3703,6 +3711,25 @@ function renderProcessList(procs: { name: string; label: string; pid: number }[]
   });
 }
 
+let _logPollTimer: ReturnType<typeof setInterval> | null = null;
+
+function startLogPolling(): void {
+  if (_logPollTimer !== null || !isAndroid) return;
+  _logPollTimer = setInterval(async () => {
+    try {
+      const lines = await invoke<string[]>("get_vpn_log");
+      lines.forEach(l => addLog(l));
+    } catch { /* ignore */ }
+  }, 2000);
+}
+
+function stopLogPolling(): void {
+  if (_logPollTimer !== null) {
+    clearInterval(_logPollTimer);
+    _logPollTimer = null;
+  }
+}
+
 let logFilter = "all";
 let logSearch = "";
 
@@ -4529,10 +4556,13 @@ function bindBridgesEvents(): void {
 
   const refresh = async () => {
     _hideBridgePopup();
+    const btn = document.getElementById("btn-bridges-refresh") as HTMLButtonElement | null;
+    if (btn) { btn.disabled = true; btn.classList.add("spinning"); }
     const baseURL = getServerBaseURL();
     if (!baseURL) {
       const tbl = document.getElementById("bridge-table");
       if (tbl) tbl.innerHTML = `<div class="empty-state"><p>${t("bridgesNoKey")}</p></div>`;
+      if (btn) { btn.disabled = false; btn.classList.remove("spinning"); }
       return;
     }
     try {
@@ -4545,7 +4575,12 @@ function bindBridgesEvents(): void {
           if (b.lat || b.lon) b.distance_km = haversineKm(userLat, userLon, b.lat, b.lon);
         });
       }
-    } catch { bridgeList = []; }
+      showToast(`${t("bridges")}: ${bridgeList.length}`, "success", 1500);
+    } catch (e) {
+      bridgeList = [];
+      showToast(t("bridgesLoadError") || "Bridges: load error", "error", 2000);
+    }
+    if (btn) { btn.disabled = false; btn.classList.remove("spinning"); }
     _updateBridgeTable();
   };
 

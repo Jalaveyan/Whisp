@@ -856,7 +856,8 @@ body {
   background: #f59e0b; box-shadow: 0 0 4px #f59e0b80;
   pointer-events: none;
 }
-.profile-actions button.spinning svg {
+.profile-actions button.spinning svg,
+button.spinning svg {
   animation: spin-refresh .8s linear infinite;
 }
 @keyframes spin-refresh { to { transform: rotate(360deg); } }
