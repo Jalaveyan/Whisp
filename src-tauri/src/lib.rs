@@ -370,9 +370,13 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
             return Ok("Android VPN starting".to_string());
         }
 
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            whisp_vpn_android::service_intent::start_vpn_service(&rules_json, &conn_key, &vpn_dns, ipv6, mitm)
-        }));
+        // JNI call is blocking — run it on the blocking thread pool so the
+        // tokio async executor is not held during VPN setup (fixes UI freeze).
+        let res = tokio::task::spawn_blocking(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                whisp_vpn_android::service_intent::start_vpn_service(&rules_json, &conn_key, &vpn_dns, ipv6, mitm)
+            }))
+        }).await.map_err(|e| format!("spawn_blocking: {}", e))?;
         match res {
             Ok(Ok(())) => return Ok("Android VPN starting".to_string()),
             Ok(Err(e)) => return Err(format!("start_vpn_service: {}", e)),
@@ -398,52 +402,62 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
         format!("{}:1080", settings.socks_addr)
     };
 
-    let (ml_transport, key_enable_ml) = {
+    let key_enable_ml = {
         use base64::Engine as _;
         let raw = settings.conn_key.trim_start_matches("whispera://");
-        let (host, port, enable_ml) = if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(raw) {
-            if let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                let srv = j["server"].as_str().unwrap_or("");
-                let h = srv.split(':').next().unwrap_or("").to_string();
-                let p: u16 = srv.split(':').nth(1).and_then(|s| s.parse().ok()).unwrap_or(8443);
-                let ml = j["enable_ml"].as_bool().unwrap_or(false);
-                (h, p, ml)
-            } else {
-                (String::new(), 8443u16, false)
-            }
-        } else {
-            (String::new(), 8443u16, false)
-        };
-
-        let transport = if !host.is_empty() {
-            let ml_c = ml_client();
-            match ml_request(&ml_c, reqwest::Method::POST, &ml_url("/recommend/transport"))
-                .timeout(Duration::from_secs(3))
-                .json(&serde_json::json!({ "server_host": host, "server_port": port }))
-                .send()
-                .await
-            {
-                Ok(resp) => resp.json::<serde_json::Value>().await
-                    .ok()
-                    .and_then(|j| j["transport"].as_str().map(|s| s.to_string()))
-                    .unwrap_or_default(),
-                Err(_) => String::new(),
-            }
-        } else {
-            String::new()
-        };
-        (transport, enable_ml)
+        base64::engine::general_purpose::STANDARD.decode(raw)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|j| j["enable_ml"].as_bool())
+            .unwrap_or(false)
     };
 
-    if !ml_transport.is_empty() {
-        settings.ml_transport = ml_transport.clone();
-        let path = settings_path(&app);
-        if let Ok(data) = serde_json::to_string_pretty(&settings) {
-            fs::write(&path, data).ok();
+    // Use the previously cached ML transport immediately — no blocking.
+    // A background task will fetch a fresh recommendation and persist it for
+    // the next connect. This eliminates the 3-second UI freeze on connect.
+    let transport_to_use = settings.ml_transport.clone();
+
+    {
+        use base64::Engine as _;
+        let raw = settings.conn_key.trim_start_matches("whispera://");
+        let (host, port) = base64::engine::general_purpose::STANDARD.decode(raw)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .map(|j| {
+                let srv = j["server"].as_str().unwrap_or("").to_string();
+                let h = srv.split(':').next().unwrap_or("").to_string();
+                let p: u16 = srv.split(':').nth(1).and_then(|s| s.parse().ok()).unwrap_or(8443);
+                (h, p)
+            })
+            .unwrap_or_default();
+
+        if !host.is_empty() {
+            let app_bg = app.clone();
+            tokio::spawn(async move {
+                let ml_c = ml_client();
+                let Ok(resp) = ml_request(&ml_c, reqwest::Method::POST, &ml_url("/recommend/transport"))
+                    .timeout(Duration::from_millis(800))
+                    .json(&serde_json::json!({ "server_host": host, "server_port": port }))
+                    .send()
+                    .await
+                else { return };
+                let Some(new_transport) = resp.json::<serde_json::Value>().await
+                    .ok()
+                    .and_then(|j| j["transport"].as_str().map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty())
+                else { return };
+                if let Ok(mut s) = get_app_settings(app_bg.clone()) {
+                    if s.ml_transport != new_transport {
+                        s.ml_transport = new_transport;
+                        let path = settings_path(&app_bg);
+                        if let Ok(data) = serde_json::to_string_pretty(&s) {
+                            fs::write(&path, data).ok();
+                        }
+                    }
+                }
+            });
         }
     }
-
-    let transport_to_use = if !ml_transport.is_empty() { &ml_transport } else { "" };
 
     let (ml_token_val, ml_server_val) = if key_enable_ml {
         (read_ml_api_token(), ml_url(""))
@@ -459,7 +473,7 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
         ml_token: &ml_token_val,
         socks_addr: &socks_addr,
         kill_switch: settings.kill_switch,
-        transport: transport_to_use,
+        transport: &transport_to_use,
         ml_server_url: &ml_server_val,
         vpn_dns: &settings.vpn_dns,
         mitm_enabled: settings.mitm_enabled,
