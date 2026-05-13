@@ -3301,7 +3301,7 @@ function showSubModal(): void {
         <label>${t("subUrl")}</label>
         <input id="sub-modal-url" placeholder="${t("subUrlHint")}" />
       </div>
-      <div id="sub-modal-err" style="color:var(--danger,#e55);font-size:12px;margin-top:-6px;display:none"></div>
+      <div id="sub-modal-err" style="color:var(--danger,#e55);font-size:12px;margin-top:4px;word-break:break-all;overflow-wrap:anywhere;display:none"></div>
       <div class="modal-actions">
         <button class="btn-cancel" id="sub-modal-cancel">${t("cancel")}</button>
         <button class="btn-save" id="sub-modal-save">${t("save")}</button>
