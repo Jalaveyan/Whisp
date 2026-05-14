@@ -1540,25 +1540,6 @@ async function doConnect(): Promise<void> {
   isConnecting = true;
   if (currentPage === "home") renderPage();
 
-  // Ask ML server for transport recommendation before connecting.
-  if (_mlStatus) {
-    try {
-      const rec = await _mlFetch("/recommend/transport", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ host: settings.ml_server || "", port: 443 }),
-        signal: AbortSignal.timeout(2000),
-      });
-      if (rec.ok) {
-        const j = await rec.json() as { transport?: string; used_rl?: boolean; confidence?: number };
-        if (j.transport) {
-          settings.ml_transport = j.transport;
-          addLog(`✦ ML recommend: ${j.transport}${j.used_rl ? " (RL)" : ""} conf=${((j.confidence ?? 0) * 100).toFixed(0)}%`);
-        }
-      }
-    } catch { /**/ }
-  }
-
   const connectStart = Date.now();
   try {
     const msg = await invoke<string>("connect");
