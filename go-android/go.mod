@@ -7,7 +7,7 @@ toolchain go1.26.4
 require (
 	github.com/sagernet/sing-box v1.13.12
 	golang.org/x/mobile v0.0.0-20250813145510-f12310a0cfd9
-	whispera v0.0.0-00010101000000-000000000000
+	github.com/nekoskin/whispera v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -189,4 +189,4 @@ require (
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
 
-replace whispera => ../whispera-src
+replace github.com/nekoskin/whispera => ../whispera-src

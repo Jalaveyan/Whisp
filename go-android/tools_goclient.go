@@ -8,5 +8,5 @@ package singbox
 import (
 	_ "golang.org/x/mobile/bind"
 
-	_ "whispera/mobile/goclient"
+	_ "github.com/nekoskin/whispera/mobile/goclient"
 )
