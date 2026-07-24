@@ -173,7 +173,7 @@ fn default_tun() -> String {
     "Mixed".to_string()
 }
 fn default_dns_mode() -> String {
-    "doh".to_string()
+    "tcp".to_string()
 }
 fn default_dns_strategy() -> String {
     "fakeip".to_string()
@@ -210,7 +210,7 @@ impl Default for AppSettings {
             allow_lan: false,
             log_level: String::new(),
             routing_mode: String::new(),
-            dns_mode: "doh".to_string(),
+            dns_mode: "tcp".to_string(),
             dns_strategy: "fakeip".to_string(),
             mtu: 1500,
             tls_fragment: false,
@@ -1933,6 +1933,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(AppState {
             mihomo: Mutex::new(MihomoManager::new(mihomo_path)),
             go_client: Mutex::new(GoClientManager::new(go_client_path)),

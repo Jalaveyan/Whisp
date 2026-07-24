@@ -242,7 +242,11 @@ func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson
 		}
 	}
 
-	ruleParts := []string{`{"action":"sniff"}`, `{"port":53,"action":"hijack-dns"}`}
+	ruleParts := []string{
+		`{"action":"sniff"}`,
+		`{"port":53,"action":"hijack-dns"}`,
+		`{"protocol":"quic","action":"reject"}`,
+	}
 	if routesJSON != "" {
 		inner := strings.TrimSpace(routesJSON)
 		inner = strings.TrimPrefix(inner, "[")
@@ -296,11 +300,11 @@ func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson
 		strategy = "local"
 	}
 
-	dnsAddr := dnsServer
-	dnsTag := "dns_udp"
+	dnsAddr := "tcp://" + dnsServer
+	dnsTag := "dns_tcp"
 	switch dnsMode {
-	case "tcp":
-		dnsAddr, dnsTag = "tcp://"+dnsServer, "dns_tcp"
+	case "udp":
+		dnsAddr, dnsTag = dnsServer, "dns_udp"
 	case "doh":
 		dnsAddr, dnsTag = "https://"+dnsServer+"/dns-query", "dns_doh"
 	}

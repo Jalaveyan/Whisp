@@ -29,6 +29,11 @@
     "clipboard-manager:allow-write-text",
     "clipboard-manager:default",
     "shell:default",
-    "notification:default"
+    "notification:default",
+    "dialog:allow-open",
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [{ "path": "**" }]
+    }
   ]
 }

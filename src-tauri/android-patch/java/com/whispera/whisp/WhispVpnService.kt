@@ -75,7 +75,7 @@ class WhispVpnService : VpnService() {
     private var pendingIpv6: Boolean = true
     private var pendingHwid: Boolean = true
     private var pendingTlsFingerprint: String = ""
-    private var pendingDnsMode: String = "udp"
+    private var pendingDnsMode: String = "tcp"
     private var pendingDnsStrategy: String = "fakeip"
     private var pendingMtu: Int = 1500
     private var pendingTlsFragment: Boolean = false
@@ -123,7 +123,7 @@ class WhispVpnService : VpnService() {
         pendingIpv6      = p.getBoolean("ipv6", true)
         pendingHwid      = p.getBoolean("hwid", true)
         pendingTlsFingerprint = p.getString("tls_fingerprint", "") ?: ""
-        pendingDnsMode   = p.getString("dns_mode", "udp") ?: "udp"
+        pendingDnsMode   = p.getString("dns_mode", "tcp") ?: "tcp"
         pendingDnsStrategy = p.getString("dns_strategy", "fakeip") ?: "fakeip"
         pendingMtu       = p.getInt("mtu", 1500)
         pendingTlsFragment = p.getBoolean("tls_fragment", false)
@@ -170,7 +170,7 @@ class WhispVpnService : VpnService() {
                         pendingIpv6      = (intent.getStringExtra(EXTRA_IPV6) ?: "1") != "0"
                         pendingHwid      = (intent.getStringExtra(EXTRA_HWID) ?: "1") != "0"
                         pendingTlsFingerprint = intent.getStringExtra(EXTRA_TLS_FINGERPRINT) ?: ""
-                        pendingDnsMode   = intent.getStringExtra(EXTRA_DNS_MODE)?.takeIf { it in listOf("udp","tcp","doh") } ?: "udp"
+                        pendingDnsMode   = intent.getStringExtra(EXTRA_DNS_MODE)?.takeIf { it in listOf("udp","tcp","doh") } ?: "tcp"
                         pendingDnsStrategy = intent.getStringExtra(EXTRA_DNS_STRATEGY)?.takeIf { it in listOf("fakeip","local") } ?: "fakeip"
                         pendingMtu       = intent.getStringExtra(EXTRA_MTU)?.toIntOrNull()?.coerceIn(576, 9000) ?: 1500
                         pendingTlsFragment = (intent.getStringExtra(EXTRA_TLS_FRAGMENT) ?: "0") == "1"

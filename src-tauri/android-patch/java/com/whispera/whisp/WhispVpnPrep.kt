@@ -22,7 +22,7 @@ object WhispVpnPrep {
     @Volatile private var pendingAllowLan: Boolean = false
     @Volatile private var pendingSocksUser: String = ""
     @Volatile private var pendingSocksPass: String = ""
-    @Volatile private var pendingDnsMode: String = "udp"
+    @Volatile private var pendingDnsMode: String = "tcp"
     @Volatile private var pendingDnsStrategy: String = "fakeip"
     @Volatile private var pendingMtu: Int = 1500
     @Volatile private var pendingTlsFragment: Boolean = false
@@ -60,7 +60,7 @@ object WhispVpnPrep {
         pendingAllowLan  = allowLan
         pendingSocksUser = socksUser
         pendingSocksPass = socksPass
-        pendingDnsMode   = dnsMode.ifEmpty { "udp" }
+        pendingDnsMode   = dnsMode.ifEmpty { "tcp" }
         pendingDnsStrategy = dnsStrategy.ifEmpty { "fakeip" }
         pendingMtu       = if (mtu in 576..9000) mtu else 1500
         pendingTlsFragment = tlsFragment

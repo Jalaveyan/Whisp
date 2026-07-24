@@ -72,16 +72,13 @@ jobs:
         id: ver
         shell: bash
         run: |
-          git fetch --tags
-          BASE="v1.0"
-          LAST=$(git tag -l "${BASE}.*" | sort -V | tail -n1)
-          if [ -z "$LAST" ]; then NEW="${BASE}.1"
-          else PATCH=$(echo "$LAST" | awk -F. '{print $NF}'); NEW="${BASE}.$((PATCH+1))"; fi
-          echo "tag=$NEW" >> $GITHUB_OUTPUT
-          VER="${NEW#v}"
-          jq --arg v "$VER" '.version = $v' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+          VER=$(jq -r '.version' src-tauri/tauri.conf.json)
+          echo "tag=v${VER}" >> $GITHUB_OUTPUT
+          CODE=$(echo "$VER" | awk -F. '{printf "%d", ($1*10000)+($2*100)+$3}')
+          jq --argjson c "$CODE" '.bundle.android.versionCode = $c' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
           mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
           sed -i.bak "s/^version = \".*\"/version = \"$VER\"/" src-tauri/Cargo.toml && rm -f src-tauri/Cargo.toml.bak
+          echo "Whisp version=$VER versionCode=$CODE"
 
       - uses: actions/setup-node@v4
         with:
@@ -219,16 +216,13 @@ jobs:
         id: ver
         shell: bash
         run: |
-          git fetch --tags
-          BASE="v1.0"
-          LAST=$(git tag -l "${BASE}.*" | sort -V | tail -n1)
-          if [ -z "$LAST" ]; then NEW="${BASE}.1"
-          else PATCH=$(echo "$LAST" | awk -F. '{print $NF}'); NEW="${BASE}.$((PATCH+1))"; fi
-          echo "tag=$NEW" >> $GITHUB_OUTPUT
-          VER="${NEW#v}"
-          jq --arg v "$VER" '.version = $v' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+          VER=$(jq -r '.version' src-tauri/tauri.conf.json)
+          echo "tag=v${VER}" >> $GITHUB_OUTPUT
+          CODE=$(echo "$VER" | awk -F. '{printf "%d", ($1*10000)+($2*100)+$3}')
+          jq --argjson c "$CODE" '.bundle.android.versionCode = $c' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
           mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
           sed -i.bak "s/^version = \".*\"/version = \"$VER\"/" src-tauri/Cargo.toml && rm -f src-tauri/Cargo.toml.bak
+          echo "Whisp version=$VER versionCode=$CODE"
 
       - uses: actions/setup-node@v4
         with:
@@ -451,13 +445,15 @@ jobs:
         id: ver
         run: |
           git fetch --tags
-          BASE="v1.0"
-          LAST=$(git tag -l "${BASE}.*" | sort -V | tail -n1)
-          if [ -z "$LAST" ]; then NEW="${BASE}.1"
-          else PATCH=$(echo "$LAST" | awk -F. '{print $NF}'); NEW="${BASE}.$((PATCH+1))"; fi
+          VER=$(jq -r '.version' src-tauri/tauri.conf.json)
+          NEW="v${VER}"
+          if git rev-parse "refs/tags/$NEW" >/dev/null 2>&1; then RELEASE=false; else RELEASE=true; fi
           echo "tag=$NEW" >> $GITHUB_OUTPUT
+          echo "release=$RELEASE" >> $GITHUB_OUTPUT
+          echo "Whisp release tag=$NEW new=$RELEASE"
 
       - name: Upload release
+        if: steps.ver.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}

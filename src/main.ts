@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { writeText as clipboardWrite, readText as clipboardRead } from "@tauri-apps/plugin-clipboard-manager";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 import { scan as qrScan, Format as QrFormat, checkPermissions as qrCheckPermissions, requestPermissions as qrRequestPermissions } from "@tauri-apps/plugin-barcode-scanner";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import "./styles.css";
@@ -93,7 +95,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     activeConns: "Активные соединения", connectToSee: "Подключитесь чтобы увидеть соединения",
     noProfiles: "Нет сохранённых профилей", addProfile: "Добавить ключ",
     keysSection: "Ключи", noKeys: "Нет сохранённых ключей и подписок",
-    pasteFromClipboard: "Вставить из буфера обмена", scanQr: "Сканировать QR-код", qrScanFailed: "Не удалось отсканировать QR-код", pasteJson: "Вставить JSON", copyJson: "Копировать JSON",
+    pasteFromClipboard: "Вставить из буфера обмена", scanQr: "Сканировать QR-код", qrScanFailed: "Не удалось отсканировать QR-код", pasteJson: "Импорт JSON из файла", copyJson: "Копировать JSON",
     jsonData: "JSON", jsonParseError: "Некорректный JSON", jsonImported: "Импортировано записей:", jsonCopied: "JSON скопирован в буфер обмена",
     clipboardEmpty: "Буфер обмена пуст", clipboardReadFailed: "Не удалось прочитать буфер обмена", clipboardWriteFailed: "Не удалось скопировать в буфер обмена",
     pasteUnrecognized: "Не удалось распознать содержимое. Ожидается whispera:// ключ или https:// ссылка",
@@ -277,7 +279,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     activeConns: "Active connections", connectToSee: "Connect to see connections",
     noProfiles: "No saved profiles", addProfile: "Add key",
     keysSection: "Keys", noKeys: "No saved keys or subscriptions",
-    pasteFromClipboard: "Paste from clipboard", scanQr: "Scan QR code", qrScanFailed: "Failed to scan QR code", pasteJson: "Paste JSON", copyJson: "Copy JSON",
+    pasteFromClipboard: "Paste from clipboard", scanQr: "Scan QR code", qrScanFailed: "Failed to scan QR code", pasteJson: "Import JSON file", copyJson: "Copy JSON",
     jsonData: "JSON", jsonParseError: "Invalid JSON", jsonImported: "Imported entries:", jsonCopied: "JSON copied to clipboard",
     clipboardEmpty: "Clipboard is empty", clipboardReadFailed: "Failed to read clipboard", clipboardWriteFailed: "Failed to copy to clipboard",
     pasteUnrecognized: "Could not recognize the content. Expected a whispera:// key or an https:// link",
@@ -461,7 +463,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     activeConns: "活跃连接", connectToSee: "连接后查看连接",
     noProfiles: "无保存配置", addProfile: "添加密钥",
     keysSection: "密钥", noKeys: "没有已保存的密钥或订阅",
-    pasteFromClipboard: "从剪贴板粘贴", scanQr: "扫描二维码", qrScanFailed: "二维码扫描失败", pasteJson: "粘贴 JSON", copyJson: "复制 JSON",
+    pasteFromClipboard: "从剪贴板粘贴", scanQr: "扫描二维码", qrScanFailed: "二维码扫描失败", pasteJson: "从文件导入 JSON", copyJson: "复制 JSON",
     jsonData: "JSON", jsonParseError: "JSON 格式无效", jsonImported: "已导入条目：", jsonCopied: "JSON 已复制到剪贴板",
     clipboardEmpty: "剪贴板为空", clipboardReadFailed: "读取剪贴板失败", clipboardWriteFailed: "复制到剪贴板失败",
     pasteUnrecognized: "无法识别内容。需要 whispera:// 密钥或 https:// 链接",
@@ -645,7 +647,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     activeConns: "اتصالات فعال", connectToSee: "برای مشاهده متصل شوید",
     noProfiles: "پروفایلی ذخیره نشده", addProfile: "افزودن کلید",
     keysSection: "کلیدها", noKeys: "کلید یا اشتراکی ذخیره نشده",
-    pasteFromClipboard: "جای‌گذاری از کلیپ‌بورد", scanQr: "اسکن کد QR", qrScanFailed: "اسکن کد QR ناموفق بود", pasteJson: "جای‌گذاری JSON", copyJson: "کپی JSON",
+    pasteFromClipboard: "جای‌گذاری از کلیپ‌بورد", scanQr: "اسکن کد QR", qrScanFailed: "اسکن کد QR ناموفق بود", pasteJson: "وارد کردن JSON از فایل", copyJson: "کپی JSON",
     jsonData: "JSON", jsonParseError: "JSON نامعتبر", jsonImported: "موارد وارد شده:", jsonCopied: "JSON در کلیپ‌بورد کپی شد",
     clipboardEmpty: "کلیپ‌بورد خالی است", clipboardReadFailed: "خواندن کلیپ‌بورد ناموفق بود", clipboardWriteFailed: "کپی در کلیپ‌بورد ناموفق بود",
     pasteUnrecognized: "محتوا شناسایی نشد. کلید whispera:// یا لینک https:// مورد نیاز است",
@@ -1516,7 +1518,7 @@ function bindProfileEvents(): void {
   document.getElementById("btn-add-key-import-json")?.addEventListener("click", (e) => {
     e.stopPropagation();
     document.querySelectorAll<HTMLElement>(".key-menu").forEach(m => { m.hidden = true; });
-    showImportJsonModal();
+    void importJsonFromFile();
   });
   document.getElementById("btn-add-key-export-json")?.addEventListener("click", async (e) => {
     e.stopPropagation();
@@ -1763,64 +1765,72 @@ function showSubModal(prefillUrl?: string): void {
   });
 }
 
-function showImportJsonModal(): void {
-  const ov = document.createElement("div");
-  ov.className = "modal-overlay";
-  ov.innerHTML = `
-    <div class="modal">
-      <h3>${t("pasteJson")}</h3>
-      <div class="modal-field">
-        <label>${t("jsonData")}</label>
-        <textarea id="import-json-text" rows="8" placeholder='{"profiles":[...],"subscriptions":[...]}'></textarea>
-      </div>
-      <div id="import-json-err" style="color:var(--danger,#e55);font-size:12px;margin-top:4px;word-break:break-all;overflow-wrap:anywhere;display:none"></div>
-      <div class="modal-actions">
-        <button class="btn-cancel" id="import-json-cancel">${t("cancel")}</button>
-        <button class="btn-save" id="import-json-save">${t("save")}</button>
-      </div>
-    </div>`;
-  document.body.appendChild(ov);
-  document.getElementById("import-json-cancel")?.addEventListener("click", () => ov.remove());
-  document.getElementById("import-json-save")?.addEventListener("click", async () => {
-    const raw = (document.getElementById("import-json-text") as HTMLTextAreaElement).value.trim();
-    const errEl = document.getElementById("import-json-err")!;
-    let parsed: { profiles?: Profile[]; subscriptions?: Subscription[] };
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      errEl.textContent = t("jsonParseError");
-      errEl.style.display = "";
+async function importJsonFromFile(): Promise<void> {
+  try {
+    const selected = await openFileDialog({
+      multiple: false,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (selected === null) return;
+    if (typeof selected === "string") {
+      await importJsonText(await readTextFile(selected));
       return;
     }
-    const btn = document.getElementById("import-json-save") as HTMLButtonElement;
-    btn.disabled = true; btn.textContent = t("subRefreshing");
-    try {
-      let importedProfiles = 0;
-      let importedSubs = 0;
-      if (Array.isArray(parsed.profiles)) {
-        parsed.profiles.forEach((p, i) => {
-          if (p?.name && p?.key && !profiles.some(x => x.key === p.key)) {
-            profiles.push({ id: (Date.now() + i).toString(), name: p.name, key: p.key });
-            importedProfiles++;
-          }
-        });
-        if (importedProfiles > 0) saveProfiles();
-      }
-      if (Array.isArray(parsed.subscriptions) && parsed.subscriptions.length > 0) {
-        const imported = await invoke<Subscription[]>("import_subscriptions", { entries: parsed.subscriptions });
-        subscriptions.push(...imported);
-        importedSubs = imported.length;
-      }
-      ov.remove();
-      showToast(`${t("jsonImported")} ${importedProfiles + importedSubs}`, "success", 3000);
-      osNotify(t("jsonImported"), `${importedProfiles + importedSubs}`);
-      if (currentPage === "home") renderPage();
-    } catch (e) {
-      errEl.textContent = String(e);
-      errEl.style.display = "";
-      btn.disabled = false; btn.textContent = t("save");
-    }
+  } catch {
+    // native picker/fs unavailable — fall back to the web file input
+  }
+  importJsonFromFileWeb();
+}
+
+function importJsonFromFileWeb(): void {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json,application/json";
+  input.style.display = "none";
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { void importJsonText(String(reader.result ?? "")); };
+    reader.onerror = () => showToast(t("jsonParseError"), "error", 2500);
+    reader.readAsText(file);
   });
+  document.body.appendChild(input);
+  input.click();
+}
+
+async function importJsonText(raw: string): Promise<void> {
+  let parsed: { profiles?: Profile[]; subscriptions?: Subscription[] };
+  try {
+    parsed = JSON.parse(raw.trim());
+  } catch {
+    showToast(t("jsonParseError"), "error", 2500);
+    return;
+  }
+  try {
+    let importedProfiles = 0;
+    let importedSubs = 0;
+    if (Array.isArray(parsed.profiles)) {
+      parsed.profiles.forEach((p, i) => {
+        if (p?.name && p?.key && !profiles.some(x => x.key === p.key)) {
+          profiles.push({ id: (Date.now() + i).toString(), name: p.name, key: p.key });
+          importedProfiles++;
+        }
+      });
+      if (importedProfiles > 0) saveProfiles();
+    }
+    if (Array.isArray(parsed.subscriptions) && parsed.subscriptions.length > 0) {
+      const imported = await invoke<Subscription[]>("import_subscriptions", { entries: parsed.subscriptions });
+      subscriptions.push(...imported);
+      importedSubs = imported.length;
+    }
+    showToast(`${t("jsonImported")} ${importedProfiles + importedSubs}`, "success", 3000);
+    osNotify(t("jsonImported"), `${importedProfiles + importedSubs}`);
+    if (currentPage === "home") renderPage();
+  } catch (e) {
+    showToast(String(e), "error", 3000);
+  }
 }
 
 const DISCORD_RULE_ID = "discord-builtin";
@@ -2283,8 +2293,8 @@ function renderSettings(): string {
         <span style="font-size:11px;opacity:.5">${t("vpnDnsHint")}</span>
       </div></div>
       <div class="setting-row"><span class="setting-label">${t("dnsMode")}</span><div class="setting-value"><div class="pill-group">
-        <button class="pill-btn ${!settings.dns_mode || settings.dns_mode === "udp" ? "active" : ""}" data-dnsmode="udp">UDP</button>
-        <button class="pill-btn ${settings.dns_mode === "tcp" ? "active" : ""}" data-dnsmode="tcp">TCP</button>
+        <button class="pill-btn ${settings.dns_mode === "udp" ? "active" : ""}" data-dnsmode="udp">UDP</button>
+        <button class="pill-btn ${!settings.dns_mode || settings.dns_mode === "tcp" ? "active" : ""}" data-dnsmode="tcp">TCP</button>
         <button class="pill-btn ${settings.dns_mode === "doh" ? "active" : ""}" data-dnsmode="doh">DoH</button>
       </div></div></div>
       <div class="setting-row" style="align-items:center">
@@ -2484,7 +2494,7 @@ function bindSettingsEvents(): void {
   document.querySelectorAll<HTMLElement>(".pill-btn[data-rmode]").forEach(el => el.addEventListener("click", () => { settings.routing_mode = el.dataset.rmode || "rule"; persistSettings(); renderPage(); }));
   document.querySelectorAll<HTMLElement>(".pill-btn[data-theme]").forEach(el => el.addEventListener("click", () => { settings.theme = el.dataset.theme || "dark"; persistSettings(); renderPage(); }));
   document.querySelectorAll<HTMLElement>(".pill-btn[data-dnsmode]").forEach(el => el.addEventListener("click", () => {
-    settings.dns_mode = el.dataset.dnsmode || "udp";
+    settings.dns_mode = el.dataset.dnsmode || "tcp";
     persistSettings();
     if (isConnected) showToast(t("reconnectToApply"), "info", 3000);
     renderPage();
