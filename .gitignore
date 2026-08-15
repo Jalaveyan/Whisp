@@ -9,3 +9,9 @@ go-android/sing-box-patched/
 # in-process go-client: whispera source checked out at CI time
 whispera-src/
 go-android/sing-box-patched/
+
+# go.mod/go.sum snapshots the local AAR rebuild leaves behind
+go-android/go.mod.bak*
+go-android/go.sum.bak*
+go-android/go.mod.prebuild
+go-android/go.sum.prebuild

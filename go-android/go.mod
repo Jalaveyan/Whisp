@@ -166,5 +166,3 @@ require (
 )
 
 replace github.com/nekoskin/whispera => ../whispera-src
-
-replace github.com/sagernet/sing-box v1.13.12 => ./sing-box-patched
