@@ -38,6 +38,8 @@ class WhispVpnService : VpnService() {
         const val EXTRA_MTU        = "com.whispera.whisp.EXTRA_MTU"
         const val EXTRA_TLS_FRAGMENT = "com.whispera.whisp.EXTRA_TLS_FRAGMENT"
         const val EXTRA_AUTO_CONNECT = "com.whispera.whisp.EXTRA_AUTO_CONNECT"
+        const val EXTRA_TUN_STACK = "com.whispera.whisp.EXTRA_TUN_STACK"
+        const val EXTRA_QUIC = "com.whispera.whisp.EXTRA_QUIC"
         const val EXTRA_MIXED_PORT = "com.whispera.whisp.EXTRA_MIXED_PORT"
         const val EXTRA_ALLOW_LAN  = "com.whispera.whisp.EXTRA_ALLOW_LAN"
         const val EXTRA_SOCKS_USER = "com.whispera.whisp.EXTRA_SOCKS_USER"
@@ -80,12 +82,23 @@ class WhispVpnService : VpnService() {
     private var pendingMtu: Int = 1500
     private var pendingTlsFragment: Boolean = false
     private var pendingAutoConnect: Boolean = false
+    private var pendingTunStack: String = "gvisor"
+    private var pendingQuic: Boolean = false
     private var pendingMixedPort: Int = 0
     private var pendingAllowLan: Boolean = false
     private var pendingSocksUser: String = ""
     private var pendingSocksPass: String = ""
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    // isLockdownEnabled needs API 29; below that Android cannot report it and we
+    // must not claim protection we cannot see.
+    private fun lockdownActive(): Boolean =
+        if (Build.VERSION.SDK_INT >= 29) {
+            try { isLockdownEnabled } catch (_: Throwable) { false }
+        } else {
+            false
+        }
+
     private fun toast(msg: String) {
         Log.i(TAG, msg)
         mainHandler.post { Toast.makeText(this, "Whisp VPN: $msg", Toast.LENGTH_LONG).show() }
@@ -106,6 +119,9 @@ class WhispVpnService : VpnService() {
             .putInt("mtu",            pendingMtu)
             .putBoolean("tls_fragment", pendingTlsFragment)
             .putBoolean("auto_connect", pendingAutoConnect)
+            .putString("tun_stack", pendingTunStack)
+            .putBoolean("quic", pendingQuic)
+            .putBoolean("lockdown", lockdownActive())
             .putInt("mixed_port",     pendingMixedPort)
             .putBoolean("allow_lan",  pendingAllowLan)
             .putString("socks_user",  pendingSocksUser)
@@ -128,6 +144,8 @@ class WhispVpnService : VpnService() {
         pendingMtu       = p.getInt("mtu", 1500)
         pendingTlsFragment = p.getBoolean("tls_fragment", false)
         pendingAutoConnect = p.getBoolean("auto_connect", false)
+        pendingTunStack = p.getString("tun_stack", "gvisor") ?: "gvisor"
+        pendingQuic = p.getBoolean("quic", false)
         pendingMixedPort = p.getInt("mixed_port", 0)
         pendingAllowLan  = p.getBoolean("allow_lan", false)
         pendingSocksUser = p.getString("socks_user", "") ?: ""
@@ -175,6 +193,8 @@ class WhispVpnService : VpnService() {
                         pendingMtu       = intent.getStringExtra(EXTRA_MTU)?.toIntOrNull()?.coerceIn(576, 9000) ?: 1500
                         pendingTlsFragment = (intent.getStringExtra(EXTRA_TLS_FRAGMENT) ?: "0") == "1"
                         pendingAutoConnect = (intent.getStringExtra(EXTRA_AUTO_CONNECT) ?: "0") == "1"
+                        pendingTunStack = intent.getStringExtra(EXTRA_TUN_STACK)?.takeIf { it in listOf("system","gvisor","mixed") } ?: "gvisor"
+                        pendingQuic = (intent.getStringExtra(EXTRA_QUIC) ?: "0") == "1"
                         pendingMixedPort = intent.getStringExtra(EXTRA_MIXED_PORT)?.toIntOrNull() ?: 0
                         pendingAllowLan  = (intent.getStringExtra(EXTRA_ALLOW_LAN) ?: "0") == "1"
                         pendingSocksUser = intent.getStringExtra(EXTRA_SOCKS_USER) ?: ""
@@ -203,8 +223,6 @@ class WhispVpnService : VpnService() {
         try {
         stopping.set(false)
         didConnect = false
-        toast("starting")
-
         if (VpnService.prepare(this) != null) {
             toast("VPN permission not granted"); stopSelf(); return
         }
@@ -214,11 +232,11 @@ class WhispVpnService : VpnService() {
                 .setSession("Whisp VPN")
                 .setMtu(pendingMtu)
                 .addAddress("172.19.0.1", 30)
-                .also { if (pendingIpv6) it.addAddress("fdfe:dcba:9876::1", 126) }
+                .also { if (pendingIpv6) it.addAddress("2001:db8::1", 126) }
                 .addRoute("0.0.0.0", 0)
                 .also { if (pendingIpv6) it.addRoute("::", 0) }
                 .also { if (pendingVpnDns != "system") it.addDnsServer(pendingVpnDns) }
-                .also { if (pendingIpv6) it.addDnsServer("fdfe:dcba:9876::2") }
+                .also { if (pendingIpv6) it.addDnsServer("2001:db8::2") }
                 .also { try { it.addDisallowedApplication(packageName) } catch (_: Throwable) {} }
                 .also { applyAppRoutingRules(it) }
                 .establish()
@@ -227,7 +245,6 @@ class WhispVpnService : VpnService() {
         } ?: run { toast("establish returned null"); stopVpn(); return }
 
         tunInterface = pfd
-        toast("TUN fd=${pfd.fd}")
 
         val filesAbsDir = filesDir.absolutePath
         val t = Thread({
@@ -237,19 +254,17 @@ class WhispVpnService : VpnService() {
                     val goLogPath = "${filesDir.absolutePath}/go-client.log"
                     val fp = if (pendingTlsFingerprint.isNotEmpty() && pendingTlsFingerprint != "random") pendingTlsFingerprint else ""
                     Log.i(TAG, "go-client Start() in-process")
-                    Goclient.start(pendingConnKey, "127.0.0.1:1080", goLogPath, fp, pendingHwid)
+                    Goclient.start(pendingConnKey, "127.0.0.1:1080", goLogPath, fp, pendingVpnDns, pendingRulesJson, pendingHwid)
                     socksAddr = "127.0.0.1:1080"
-                    if (waitForPort("127.0.0.1", 1080, 4000)) toast("go-client started")
-                    else Log.w(TAG, "go-client did not bind on :1080 within 4s, proceeding anyway")
+                    if (!waitForPort("127.0.0.1", 1080, 4000)) Log.w(TAG, "go-client did not bind on :1080 within 4s, proceeding anyway")
                 }
 
                 if (Thread.currentThread().isInterrupted) return@Thread
 
                 Log.i(TAG, "singbox Start() fd=${pfd.fd}")
-                Singbox.start(pfd.fd, filesAbsDir, socksAddr, pendingConnKey, pendingRulesJson, pendingIpv6, pendingDnsMode, pendingVpnDns, pendingDnsStrategy, pendingMtu, pendingTlsFragment, pendingMixedPort, pendingSocksUser, pendingSocksPass, pendingAllowLan)
+                Singbox.start(pfd.fd, filesAbsDir, socksAddr, pendingConnKey, pendingRulesJson, pendingIpv6, pendingDnsMode, pendingVpnDns, pendingDnsStrategy, pendingMtu, pendingTlsFragment, pendingMixedPort, pendingSocksUser, pendingSocksPass, pendingAllowLan, pendingTunStack, pendingQuic)
                 Log.i(TAG, "singbox running")
                 didConnect = true
-                toast("VPN started")
             } catch (t: Throwable) {
                 if (t is InterruptedException) return@Thread
                 Log.e(TAG, "singbox FATAL: ${t.stackTraceToString()}")

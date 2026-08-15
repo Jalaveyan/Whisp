@@ -55,8 +55,7 @@ struct RoutingRule {
     action: String,
 }
 
-#[cfg(target_os = "android")]
-fn build_android_rules_json(settings: &AppSettings) -> String {
+fn build_client_rules_json(settings: &AppSettings) -> String {
     let mut entries: Vec<serde_json::Value> = Vec::new();
     let push = |dst: &mut Vec<serde_json::Value>, r: &RoutingRule, force_action: Option<&str>| {
         let action = force_action.unwrap_or(&r.action).to_uppercase();
@@ -98,6 +97,10 @@ fn build_android_rules_json(settings: &AppSettings) -> String {
             obj.insert("action".into(), "DIRECT".into());
             entries.push(serde_json::Value::Object(obj));
         }
+        let mut geo = serde_json::Map::new();
+        geo.insert("kind".into(), "geoip".into());
+        geo.insert("action".into(), "DIRECT".into());
+        entries.push(serde_json::Value::Object(geo));
     }
     for r in &settings.routing_rules {
         push(&mut entries, r, None);
@@ -164,6 +167,12 @@ struct AppSettings {
     tls_fragment: bool,
     #[serde(default = "default_true")]
     sub_auto_update: bool,
+    #[serde(default)]
+    quic: bool,
+    #[serde(default = "default_ping_mode")]
+    ping_mode: String,
+    #[serde(default = "default_tun_android")]
+    tun_stack_android: String,
 }
 
 fn default_true() -> bool {
@@ -171,6 +180,12 @@ fn default_true() -> bool {
 }
 fn default_tun() -> String {
     "Mixed".to_string()
+}
+fn default_tun_android() -> String {
+    "gvisor".to_string()
+}
+fn default_ping_mode() -> String {
+    "tcp".to_string()
 }
 fn default_dns_mode() -> String {
     "tcp".to_string()
@@ -205,6 +220,9 @@ impl Default for AppSettings {
             multi_bridges: Vec::new(),
             tls_fingerprint: String::new(),
             bypass_ru: true,
+            quic: false,
+            ping_mode: "tcp".to_string(),
+            tun_stack_android: "gvisor".to_string(),
             socks_user: String::new(),
             socks_pass: String::new(),
             allow_lan: false,
@@ -300,7 +318,7 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
     #[cfg(target_os = "android")]
     {
         let settings = get_app_settings(app.clone())?;
-        let rules_json = build_android_rules_json(&settings);
+        let rules_json = build_client_rules_json(&settings);
         let conn_key = settings.conn_key.clone();
         let vpn_dns = settings
             .custom_dns
@@ -321,6 +339,8 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
         let mtu = settings.mtu;
         let tls_fragment = settings.tls_fragment;
         let auto_connect = settings.auto_connect;
+        let tun_stack = settings.tun_stack_android.to_lowercase();
+        let quic = settings.quic;
 
         if !conn_key.is_empty() {
             use sha2::Digest;
@@ -343,7 +363,7 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
                 whisp_vpn_android::service_intent::save_pending_start(
                     &rules_json, &conn_key, &vpn_dns, ipv6, hwid, &tls_fingerprint,
                     mixed_port, allow_lan, &socks_user, &socks_pass, &dns_mode,
-                    &dns_strategy, mtu, tls_fragment, auto_connect,
+                    &dns_strategy, mtu, tls_fragment, auto_connect, &tun_stack, quic,
                 )
             }));
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
@@ -354,7 +374,7 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
 
         let res = tokio::task::spawn_blocking(move || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                whisp_vpn_android::service_intent::start_vpn_service(&rules_json, &conn_key, &vpn_dns, ipv6, hwid, &tls_fingerprint, mixed_port, allow_lan, &socks_user, &socks_pass, &dns_mode, &dns_strategy, mtu, tls_fragment, auto_connect)
+                whisp_vpn_android::service_intent::start_vpn_service(&rules_json, &conn_key, &vpn_dns, ipv6, hwid, &tls_fingerprint, mixed_port, allow_lan, &socks_user, &socks_pass, &dns_mode, &dns_strategy, mtu, tls_fragment, auto_connect, &tun_stack, quic)
             }))
         }).await.map_err(|e| format!("spawn_blocking: {}", e))?;
         match res {
@@ -394,6 +414,7 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
         spoof_ips: &settings.spoof_ips,
         hwid: settings.hwid,
         tls_fingerprint: &settings.tls_fingerprint,
+        split_rules: &build_client_rules_json(&settings),
     }).map_err(|e| { eprintln!("[connect] go-client start FAILED: {}", e); e })?;
     eprintln!("[connect] go-client started OK");
 
@@ -455,7 +476,6 @@ async fn connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Re
         extra_socks_addrs: &[],
         custom_dns: &settings.custom_dns,
         tls_fingerprint: &settings.tls_fingerprint,
-        bypass_ru: settings.bypass_ru,
         socks_user: &settings.socks_user,
         socks_pass: &settings.socks_pass,
         allow_lan: settings.allow_lan,
@@ -946,7 +966,6 @@ async fn save_routing_rules(app: tauri::AppHandle, rules: Vec<RoutingRule>) -> R
         extra_socks_addrs: &[],
         custom_dns: &settings.custom_dns,
         tls_fingerprint: &settings.tls_fingerprint,
-        bypass_ru: settings.bypass_ru,
         socks_user: &settings.socks_user,
         socks_pass: &settings.socks_pass,
         allow_lan: settings.allow_lan,
@@ -1002,7 +1021,6 @@ async fn apply_tls_fingerprint(app: tauri::AppHandle) -> Result<(), String> {
         extra_socks_addrs: &[],
         custom_dns: &settings.custom_dns,
         tls_fingerprint: &settings.tls_fingerprint,
-        bypass_ru: settings.bypass_ru,
         socks_user: &settings.socks_user,
         socks_pass: &settings.socks_pass,
         allow_lan: settings.allow_lan,
@@ -1168,7 +1186,6 @@ async fn save_blocklist(app: tauri::AppHandle, rules: Vec<RoutingRule>) -> Resul
         extra_socks_addrs: &[],
         custom_dns: &settings.custom_dns,
         tls_fingerprint: &settings.tls_fingerprint,
-        bypass_ru: settings.bypass_ru,
         socks_user: &settings.socks_user,
         socks_pass: &settings.socks_pass,
         allow_lan: settings.allow_lan,
@@ -1208,7 +1225,6 @@ fn install_services(
             extra_socks_addrs: &[],
             custom_dns: &settings.custom_dns,
             tls_fingerprint: &settings.tls_fingerprint,
-            bypass_ru: settings.bypass_ru,
             socks_user: &settings.socks_user,
             socks_pass: &settings.socks_pass,
             allow_lan: settings.allow_lan,
@@ -1240,6 +1256,7 @@ fn install_services(
             spoof_ips: &settings.spoof_ips,
             hwid: settings.hwid,
             tls_fingerprint: &settings.tls_fingerprint,
+            split_rules: &build_client_rules_json(&settings),
         })?;
     }
 
@@ -1486,116 +1503,181 @@ async fn check_subscription_update(
     Ok(result)
 }
 
-fn server_host_from_key(key: &str) -> String {
+// Keys come base64-encoded far more often than as a bare host:port, so anything
+// reaching for the server address must decode first — parsing the raw body only
+// ever worked for the legacy form.
+fn server_addr_from_key(key: &str) -> Option<(String, u16)> {
     use base64::Engine as _;
     let body = key.trim().strip_prefix("whispera://").unwrap_or(key.trim());
     let b64 = body.split(['?', '#']).next().unwrap_or(body);
+
     if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
             for field in ["whispera_addr", "server"] {
-                if let Some(addr) = v.get(field).and_then(|x| x.as_str()) {
-                    let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(addr);
-                    if !host.is_empty() {
-                        return host.to_string();
+                let Some(addr) = v.get(field).and_then(|x| x.as_str()) else {
+                    continue;
+                };
+                match addr.rsplit_once(':') {
+                    Some((h, p)) if !h.is_empty() => {
+                        return Some((h.to_string(), p.parse().unwrap_or(443)))
                     }
+                    _ if !addr.is_empty() => return Some((addr.to_string(), 443)),
+                    _ => {}
                 }
             }
         }
     }
-    if let Some((h, _)) = b64.rsplit_once(':') {
-        if !h.is_empty() {
-            return h.to_string();
-        }
+
+    match b64.rsplit_once(':') {
+        Some((h, p)) if !h.is_empty() => Some((h.to_string(), p.parse().unwrap_or(443))),
+        _ => None,
     }
-    String::new()
+}
+
+fn server_host_from_key(key: &str) -> String {
+    server_addr_from_key(key).map(|(h, _)| h).unwrap_or_default()
 }
 
 #[tauri::command]
-async fn ping_key(key: String, state: tauri::State<'_, AppState>) -> Result<u64, String> {
-    let key = key.trim();
-    let host_port = key
-        .strip_prefix("whispera://")
-        .ok_or("not a whispera:// key")?
-        .split('?')
-        .next()
-        .filter(|s| !s.is_empty())
-        .ok_or("cannot parse server address")?
-        .to_string();
-    let (host, port_str) = host_port.rsplit_once(':').ok_or("invalid host:port")?;
-    let port: u16 = port_str.parse().map_err(|_| "invalid port")?;
+fn vpn_lockdown() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        return std::panic::catch_unwind(whisp_vpn_android::service_intent::is_lockdown_enabled)
+            .unwrap_or(Ok(false))
+            .unwrap_or(false);
+    }
+    #[cfg(not(target_os = "android"))]
+    false
+}
 
-    let proxy_url = state.android_proxy.lock().ok().and_then(|g| g.clone());
+#[tauri::command]
+fn open_vpn_settings() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        std::panic::catch_unwind(whisp_vpn_android::service_intent::open_vpn_settings)
+            .map_err(|_| "panic".to_string())??;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    Err("android only".to_string())
+}
+
+#[tauri::command]
+async fn ping_key(key: String, mode: Option<String>) -> Result<u64, String> {
+    let (host, port) = server_addr_from_key(&key).ok_or("cannot parse server address")?;
+    let (host, port) = (host.as_str(), port);
+    let host_port = format!("{}:{}", host, port);
+
+    let mode = mode.unwrap_or_else(|| "tcp".to_string());
+
+    // Always measure the raw path to this key's server, never through the active
+    // tunnel: the SOCKS proxy confirms a connection before it exists, so a
+    // tunnelled reading times localhost instead of the server, and keys stop
+    // being comparable with each other — which is the whole point of the check.
+    if mode == "icmp" {
+        return icmp_ping(host).await;
+    }
+
     let start = std::time::Instant::now();
-
-    if let Some(ref proxy) = proxy_url {
-        socks5_ping(proxy, host, port).await?;
-    } else {
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio::net::TcpStream::connect(&host_port),
-        )
-        .await
-        .map_err(|_| "timeout".to_string())?
-        .map_err(|e| e.to_string())?;
+    match mode.as_str() {
+        "get" | "head" => http_ping(&mode, host, port).await?,
+        _ => {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                tokio::net::TcpStream::connect(&host_port),
+            )
+            .await
+            .map_err(|_| "timeout".to_string())?
+            .map_err(|e| e.to_string())?;
+        }
     }
     Ok(start.elapsed().as_millis() as u64)
 }
 
-async fn socks5_ping(proxy_url: &str, target_host: &str, target_port: u16) -> Result<(), String> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let after_scheme = proxy_url
-        .strip_prefix("socks5h://")
-        .or_else(|| proxy_url.strip_prefix("socks5://"))
-        .unwrap_or(proxy_url);
-    let (creds, hostport) = after_scheme.rsplit_once('@').unwrap_or(("", after_scheme));
-    let (proxy_host, proxy_port_str) = hostport.rsplit_once(':').unwrap_or(("127.0.0.1", "1080"));
-    let proxy_port: u16 = proxy_port_str.parse().unwrap_or(1080);
-    let (user, pass) = creds.split_once(':').unwrap_or(("", ""));
-
-    let mut stream = tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::net::TcpStream::connect((proxy_host, proxy_port)),
-    )
-    .await
-    .map_err(|_| "socks5 timeout".to_string())?
-    .map_err(|e| e.to_string())?;
-
-    stream.write_all(&[5, 1, 2]).await.map_err(|e| e.to_string())?;
-    let mut buf = [0u8; 2];
-    stream.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
-    if buf[0] != 5 || buf[1] != 2 {
-        return Err("socks5 auth rejected".to_string());
-    }
-
-    let u = user.as_bytes();
-    let p = pass.as_bytes();
-    let mut auth = vec![1u8, u.len() as u8];
-    auth.extend_from_slice(u);
-    auth.push(p.len() as u8);
-    auth.extend_from_slice(p);
-    stream.write_all(&auth).await.map_err(|e| e.to_string())?;
-    stream.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
-    if buf[1] != 0 {
-        return Err("socks5 auth failed".to_string());
-    }
-
-    let h = target_host.as_bytes();
-    let mut req = vec![5u8, 1, 0, 3, h.len() as u8];
-    req.extend_from_slice(h);
-    req.push((target_port >> 8) as u8);
-    req.push(target_port as u8);
-    stream.write_all(&req).await.map_err(|e| e.to_string())?;
-
-    let mut hdr = [0u8; 4];
-    tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut hdr))
-        .await
-        .map_err(|_| "socks5 connect timeout".to_string())?
+async fn http_ping(mode: &str, host: &str, port: u16) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .danger_accept_invalid_certs(true)
+        .no_proxy()
+        .build()
         .map_err(|e| e.to_string())?;
-    if hdr[1] != 0 {
-        return Err(format!("socks5 connect error code {}", hdr[1]));
+
+    let url = format!("https://{}:{}/", host, port);
+    let req = if mode == "head" { client.head(&url) } else { client.get(&url) };
+    // The server camouflages as a site, so any answer — even a 404 — is a
+    // complete round trip and times it honestly.
+    req.send()
+        .await
+        .map(|_| ())
+        .map_err(|e| if e.is_timeout() { "timeout".to_string() } else { e.to_string() })
+}
+
+async fn icmp_ping(host: &str) -> Result<u64, String> {
+    let host = host.to_string();
+    tokio::task::spawn_blocking(move || icmp_ping_blocking(&host))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn icmp_ping_blocking(host: &str) -> Result<u64, String> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+
+    let addr = (host, 0u16)
+        .to_socket_addrs()
+        .map_err(|e| e.to_string())?
+        .find(|a| a.is_ipv4())
+        .ok_or("no IPv4 address")?;
+    let IpAddr::V4(v4) = addr.ip() else {
+        return Err("no IPv4 address".to_string());
+    };
+
+    let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::ICMPV4))
+        .map_err(|e| format!("icmp socket: {}", e))?;
+    sock.set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| e.to_string())?;
+
+    let ident: u16 = std::process::id() as u16;
+    let mut packet = [0u8; 16];
+    packet[0] = 8;
+    packet[4..6].copy_from_slice(&ident.to_be_bytes());
+    packet[6..8].copy_from_slice(&1u16.to_be_bytes());
+    let sum = icmp_checksum(&packet);
+    packet[2..4].copy_from_slice(&sum.to_be_bytes());
+
+    let start = std::time::Instant::now();
+    sock.send_to(&packet, &SocketAddr::new(IpAddr::V4(v4), 0).into())
+        .map_err(|e| format!("icmp send: {}", e))?;
+
+    // Anything may land on the socket — an unreachable error answers instantly and
+    // would be timed as a successful round trip. Only an echo reply counts.
+    let deadline = start + Duration::from_secs(5);
+    let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 128];
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err("timeout".to_string());
+        }
+        let n = sock.recv(&mut buf).map_err(|_| "timeout".to_string())?;
+        if n > 0 && unsafe { buf[0].assume_init() } == 0 {
+            return Ok(start.elapsed().as_millis() as u64);
+        }
     }
-    Ok(())
+}
+
+fn icmp_checksum(data: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    for chunk in data.chunks(2) {
+        let word = if chunk.len() == 2 {
+            u16::from_be_bytes([chunk[0], chunk[1]]) as u32
+        } else {
+            (chunk[0] as u32) << 8
+        };
+        sum = sum.wrapping_add(word);
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
 }
 
 #[tauri::command]
@@ -2037,6 +2119,8 @@ pub fn run() {
             delete_sub_key,
             check_subscription_update,
             ping_key,
+            vpn_lockdown,
+            open_vpn_settings,
             get_connections,
             close_connection,
             toggle_connection,

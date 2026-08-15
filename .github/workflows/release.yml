@@ -348,7 +348,7 @@ jobs:
             -tags with_gvisor \
             -ldflags=-checklinkname=0 \
             -o ../src-tauri/gen/android/app/libs/singbox.aar \
-            . github.com/nekoskin/whispera/mobile/goclient
+            . github.com/nekoskin/whispera/app/goclient/mobile
           ls -lh ../src-tauri/gen/android/app/libs/singbox.aar
 
       - name: Apply VpnService patch (Kotlin + manifest)

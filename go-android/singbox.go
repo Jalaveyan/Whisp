@@ -82,31 +82,37 @@ func buildSingboxRoutes(rulesJson string) (routesJSON string, needSniff bool, ne
 		}
 	}
 
-	for _, r := range rules {
-		out := actionToOutbound(r.Action)
+	entryFor := func(action string) *sbRouteRule {
+		out := actionToOutbound(action)
 		if _, exists := byOutbound[out]; !exists {
 			byOutbound[out] = &sbRouteRule{Outbound: out}
 		}
-		entry := byOutbound[out]
+		return byOutbound[out]
+	}
+
+	for _, r := range rules {
 		switch r.Kind {
 		case "domain-suffix":
 			if r.Suffix != "" {
+				entry := entryFor(r.Action)
 				entry.DomainSuffix = append(entry.DomainSuffix, r.Suffix)
 				needSniff = true
 			}
 		case "domain-keyword":
 			if r.Keyword != "" {
+				entry := entryFor(r.Action)
 				entry.DomainKeyword = append(entry.DomainKeyword, r.Keyword)
 				needSniff = true
 			}
 		case "domain-exact":
 			if r.Domain != "" {
+				entry := entryFor(r.Action)
 				entry.Domain = append(entry.Domain, r.Domain)
 				needSniff = true
 			}
 		case "ip-cidr":
 			if r.CIDR != "" {
-				entry.IPCIDR = append(entry.IPCIDR, r.CIDR)
+				entryFor(r.Action).IPCIDR = append(entryFor(r.Action).IPCIDR, r.CIDR)
 			}
 		}
 	}
@@ -177,7 +183,7 @@ func (p *platform) LocalDNSTransport() libbox.LocalDNSTransport              { r
 func (p *platform) ClearDNSCache()                                           {}
 func (p *platform) SendNotification(notification *libbox.Notification) error { return nil }
 
-func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson string, ipv6 bool, dnsMode string, dnsServer string, dnsStrategy string, mtu int32, tlsFragment bool, mixedPort int32, mixedUser string, mixedPass string, allowLan bool) (retErr error) {
+func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson string, ipv6 bool, dnsMode string, dnsServer string, dnsStrategy string, mtu int32, tlsFragment bool, mixedPort int32, mixedUser string, mixedPass string, allowLan bool, tunStack string, quic bool) (retErr error) {
 	alog(fmt.Sprintf("Start() ENTER fd=%d workDir=%s socksAddr=%s", fd, workDir, socksAddr))
 
 	defer func() {
@@ -245,7 +251,15 @@ func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson
 	ruleParts := []string{
 		`{"action":"sniff"}`,
 		`{"port":53,"action":"hijack-dns"}`,
-		`{"protocol":"quic","action":"reject"}`,
+	}
+	if !quic {
+		ruleParts = append(ruleParts, `{"protocol":"quic","action":"reject"}`)
+	}
+
+	switch tunStack {
+	case "system", "gvisor", "mixed":
+	default:
+		tunStack = "gvisor"
 	}
 	if routesJSON != "" {
 		inner := strings.TrimSpace(routesJSON)
@@ -276,8 +290,8 @@ func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson
 	tunAddrs := `"172.19.0.1/30"`
 	fakeRange := `"inet4_range":"198.18.0.0/15"`
 	if ipv6 {
-		tunAddrs += `, "fdfe:dcba:9876::1/126"`
-		fakeRange += `,"inet6_range":"fc00::/18"`
+		tunAddrs += `, "2001:db8::1/126"`
+		fakeRange += `,"inet6_range":"2001:db8:1::/48"`
 	}
 
 	if dnsServer == "" {
@@ -339,7 +353,7 @@ func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson
     "address": [%s],
     "mtu": %d,
     "auto_route": false,
-    "stack": "mixed"
+    "stack": %q
   }%s],
   "outbounds": %s,
   "route": {
@@ -347,7 +361,7 @@ func Start(fd int32, workDir string, socksAddr string, connKey string, rulesJson
     "final": "%s",
     "auto_detect_interface": false
   }
-}`, dnsObject, tunAddrs, mtu, mixedInbound, outbounds, routeRules, finalOut)
+}`, dnsObject, tunAddrs, mtu, tunStack, mixedInbound, outbounds, routeRules, finalOut)
 
 	_ = os.WriteFile(workDir+"/singbox-config.json", []byte(config), 0o600)
 	alog(fmt.Sprintf("calling NewService fd=%d", fd))

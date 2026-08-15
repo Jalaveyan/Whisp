@@ -52,6 +52,9 @@ interface AppSettings {
   multi_bridges?: MultiBridgeEntry[];
   tls_fingerprint?: string;
   bypass_ru?: boolean;
+  quic?: boolean;
+  tun_stack_android?: string;
+  ping_mode?: string;
   socks_user?: string;
   socks_pass?: string;
   allow_lan?: boolean;
@@ -132,7 +135,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     noSubscriptions: "Нет подписок", subKeys: "ключей", subRefreshing: "Обновление...", subAdded: "Подписка добавлена",
     subRefresh: "Обновить", subDelete: "Удалить", subLastUpdated: "Обновлено",
     subSelectKey: "Выбрать ключ", subRename: "Переименовать", more: "Ещё",
-    pingKey: "Пинг", pingAll: "Пинг всех", pingMs: "мс", pingTimeout: "timeout", pingRunning: "...",
+    pingKey: "Пинг", pingAll: "Пинг всех", pingMs: "мс", pingTimeout: "timeout", pingError: "ошибка", pingRunning: "...",
     loading: "Загрузка…",
     copied: "Скопировано",
     vpnConnected: "Подключено",
@@ -231,6 +234,16 @@ const i18n: Record<Lang, Record<string, string>> = {
     dnsFakeip: "Поддельный",
     dnsLocal: "Локальный",
     dnsStrategyHint: "Поддельный (fake-IP) — домены резолвятся внутри тоннеля, IP не видны провайдеру. Локальный — системный резолвер устройства.",
+    killSwitchLabel: "Аварийное отключение",
+    killSwitchOn: "Система блокирует соединения без VPN",
+    killSwitchOff: "Соединения без VPN не блокируются",
+    killSwitchOpen: "Настройки системы",
+    tunStackLabel: "Сетевой стек",
+    tunStackHint: "gVisor — свой стек в пространстве приложения, работает везде. Системный — быстрее, но на Android без root не тянет IPv6. Смешанный — TCP системный, UDP через gVisor.",
+    quicLabel: "Разрешить QUIC",
+    quicHint: "При TCP-транспорте QUIC идёт внутри туннеля поверх TCP — двойное управление перегрузкой и повторы поверх надёжного канала. Выключено: QUIC отклоняется и приложение само берёт TCP напрямую, обычно это быстрее.",
+    pingModeLabel: "Способ проверки",
+    pingModeHint: "TCP — время установки соединения. GET и HEAD — полный HTTP-запрос, ближе к реальной загрузке. ICMP идёт мимо туннеля: наш протокол несёт только TCP и UDP.",
     mtuLabel: "MTU",
     mtuHint: "Размер MTU для TUN-интерфейса (576–9000, по умолчанию 1500)",
     tlsFragment: "Фрагментация TLS",
@@ -316,7 +329,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     noSubscriptions: "No subscriptions", subKeys: "keys", subRefreshing: "Refreshing...", subAdded: "Subscription added",
     subRefresh: "Refresh", subDelete: "Delete", subLastUpdated: "Updated",
     subSelectKey: "Use key", subRename: "Rename", more: "More",
-    pingKey: "Ping", pingAll: "Ping all", pingMs: "ms", pingTimeout: "timeout", pingRunning: "...",
+    pingKey: "Ping", pingAll: "Ping all", pingMs: "ms", pingTimeout: "timeout", pingError: "error", pingRunning: "...",
     loading: "Loading…",
     copied: "Copied",
     vpnConnected: "Connected",
@@ -415,6 +428,16 @@ const i18n: Record<Lang, Record<string, string>> = {
     dnsFakeip: "Fake-IP",
     dnsLocal: "Local",
     dnsStrategyHint: "Fake-IP — domains resolved inside the tunnel, IPs hidden from the ISP. Local — device's system resolver.",
+    killSwitchLabel: "Kill switch",
+    killSwitchOn: "The system blocks connections without a VPN",
+    killSwitchOff: "Connections without a VPN are not blocked",
+    killSwitchOpen: "System settings",
+    tunStackLabel: "Network stack",
+    tunStackHint: "gVisor — userspace stack, works everywhere. System — faster, but on Android carries no IPv6 without root. Mixed — system TCP, gVisor UDP.",
+    quicLabel: "Allow QUIC",
+    quicHint: "On a TCP transport QUIC travels inside the tunnel over TCP — congestion control and retransmits stacked on an already reliable channel. Off: QUIC is rejected and the app takes plain TCP itself, usually faster.",
+    pingModeLabel: "Check method",
+    pingModeHint: "TCP — connection setup time. GET and HEAD — a full HTTP request, closer to real loading. ICMP goes outside the tunnel: our protocol carries only TCP and UDP.",
     mtuLabel: "MTU",
     mtuHint: "MTU size for the TUN interface (576–9000, default 1500)",
     tlsFragment: "TLS fragmentation",
@@ -500,7 +523,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     noSubscriptions: "无订阅", subKeys: "密钥", subRefreshing: "更新中...", subAdded: "订阅已添加",
     subRefresh: "刷新", subDelete: "删除", subLastUpdated: "已更新",
     subSelectKey: "使用密钥", subRename: "重命名", more: "更多",
-    pingKey: "延迟", pingAll: "全部延迟", pingMs: "毫秒", pingTimeout: "超时", pingRunning: "...",
+    pingKey: "延迟", pingAll: "全部延迟", pingMs: "毫秒", pingTimeout: "超时", pingError: "错误", pingRunning: "...",
     loading: "加载中…",
     copied: "已复制",
     vpnConnected: "已连接",
@@ -599,6 +622,16 @@ const i18n: Record<Lang, Record<string, string>> = {
     dnsFakeip: "虚假 IP",
     dnsLocal: "本地",
     dnsStrategyHint: "虚假IP — 域名在隧道内解析，运营商看不到真实IP。本地 — 使用设备系统解析器。",
+    killSwitchLabel: "断网保护",
+    killSwitchOn: "系统已阻止无VPN的连接",
+    killSwitchOff: "未阻止无VPN的连接",
+    killSwitchOpen: "系统设置",
+    tunStackLabel: "网络栈",
+    tunStackHint: "gVisor — 用户态网络栈，兼容性最好。System — 更快，但在未root的安卓上不支持IPv6。Mixed — TCP走系统栈，UDP走gVisor。",
+    quicLabel: "允许 QUIC",
+    quicHint: "使用TCP传输时，QUIC在隧道内跑在TCP之上——可靠信道上再叠加一层拥塞控制和重传。关闭后拒绝QUIC，应用会直接改用TCP，通常更快。",
+    pingModeLabel: "检测方式",
+    pingModeHint: "TCP — 建立连接的时间。GET 和 HEAD — 完整HTTP请求，更接近真实加载。ICMP不走隧道：本协议只承载TCP和UDP。",
     mtuLabel: "MTU",
     mtuHint: "TUN 接口的 MTU 大小（576–9000，默认 1500）",
     tlsFragment: "TLS 分片",
@@ -684,7 +717,7 @@ const i18n: Record<Lang, Record<string, string>> = {
     noSubscriptions: "اشتراکی وجود ندارد", subKeys: "کلیدها", subRefreshing: "در حال بروزرسانی...", subAdded: "اشتراک اضافه شد",
     subRefresh: "بروزرسانی", subDelete: "حذف", subLastUpdated: "بروزرسانی شده",
     subSelectKey: "استفاده از کلید", subRename: "تغییر نام", more: "بیشتر",
-    pingKey: "پینگ", pingAll: "پینگ همه", pingMs: "میلی‌ثانیه", pingTimeout: "تایم‌اوت", pingRunning: "...",
+    pingKey: "پینگ", pingAll: "پینگ همه", pingMs: "میلی‌ثانیه", pingTimeout: "تایم‌اوت", pingError: "خطا", pingRunning: "...",
     loading: "در حال بارگذاری…",
     copied: "کپی شد",
     vpnConnected: "متصل شد",
@@ -783,6 +816,16 @@ const i18n: Record<Lang, Record<string, string>> = {
     dnsFakeip: "جعلی (Fake-IP)",
     dnsLocal: "محلی",
     dnsStrategyHint: "جعلی (fake-IP) — دامنه‌ها داخل تونل حل می‌شوند و IP از ISP پنهان است. محلی — رزولور سیستم دستگاه.",
+    killSwitchLabel: "قطع‌کن اضطراری",
+    killSwitchOn: "سیستم اتصال‌های بدون VPN را مسدود می‌کند",
+    killSwitchOff: "اتصال‌های بدون VPN مسدود نیستند",
+    killSwitchOpen: "تنظیمات سیستم",
+    tunStackLabel: "پشته شبکه",
+    tunStackHint: "gVisor — پشته در فضای کاربر، همه‌جا کار می‌کند. System — سریع‌تر، اما در اندروید بدون روت IPv6 ندارد.",
+    quicLabel: "اجازه QUIC",
+    quicHint: "با ترابری TCP، کیوآیک داخل تونل روی TCP می‌رود — کنترل ازدحام و ارسال مجدد روی کانالی که خودش قابل‌اطمینان است. خاموش: QUIC رد می‌شود و برنامه مستقیم TCP می‌گیرد، معمولاً سریع‌تر.",
+    pingModeLabel: "روش بررسی",
+    pingModeHint: "TCP — زمان برقراری اتصال. GET و HEAD — درخواست کامل HTTP، نزدیک‌تر به بارگذاری واقعی. ICMP از تونل عبور نمی‌کند: پروتکل ما فقط TCP و UDP را حمل می‌کند.",
     mtuLabel: "MTU",
     mtuHint: "اندازه MTU برای رابط TUN (۵۷۶–۹۰۰۰، پیش‌فرض ۱۵۰۰)",
     tlsFragment: "قطعه‌قطعه‌سازی TLS",
@@ -851,14 +894,15 @@ function osNotify(title: string, body: string): void {
 let settings: AppSettings = {
   conn_key: "", auto_connect: false, theme: "dark", mihomo_port: 9887,
   socks_addr: "127.0.0.1", kill_switch: false, dns_redirect: false,
-  ipv6: true, tun_stack: "Mixed", hwid: true, auth_tip: true, secret: "",
+  ipv6: true, tun_stack: "Mixed", tun_stack_android: "gvisor", quic: false, ping_mode: "tcp", hwid: true, auth_tip: true, secret: "",
   dns_strategy: "fakeip", mtu: 1500, tls_fragment: false, sub_auto_update: true,
 };
 
 let profiles: Profile[] = [];
 let subscriptions: Subscription[] = [];
 let activeRef = "";
-let pingResults: Map<string, number | "pinging" | "timeout"> = new Map();
+let vpnLockdown = false;
+let pingResults: Map<string, number | "pinging" | "timeout" | { err: string }> = new Map();
 
 function refKey(ref: string): string | undefined {
   if (ref.startsWith("p:")) return profiles.find(p => p.id === ref.slice(2))?.key;
@@ -1236,6 +1280,13 @@ function renderNav(): void {
       currentPage = el.dataset.page as Page;
       renderNav();
       renderPage();
+      // Lockdown is a system setting the user can change behind our back, so read
+      // it fresh every time the page that shows it is opened.
+      if (currentPage === "settings" && isAndroid) {
+        invoke<boolean>("vpn_lockdown").then(on => {
+          if (on !== vpnLockdown) { vpnLockdown = on; renderPage(); }
+        }).catch(() => {});
+      }
     });
   });
   document.querySelectorAll<HTMLElement>(".lang-btn[data-lang]").forEach(el => {
@@ -1352,6 +1403,8 @@ function renderHome(): string {
 
     <div class="section-header">
       <span class="section-title">${t("keysSection")}</span>
+      <div class="section-actions">
+      <button class="btn-icon-add" id="btn-ping-all" title="${t("pingAll")}">${ICONS.ping}</button>
       <div class="key-menu-wrap">
         <button class="btn-icon-add" id="btn-add-key">${ICONS.plus}</button>
         <div class="key-menu" data-addmenu hidden style="min-width:210px">
@@ -1364,6 +1417,7 @@ function renderHome(): string {
           <button class="km-item" id="btn-refresh-all-subs">${ICONS.refresh}<span>${t("refreshAllSubs")}</span></button>
           <button class="km-item" id="btn-toggle-sub-auto">${ICONS.bolt}<span>${settings.sub_auto_update ? t("subAutoUpdateOn") : t("subAutoUpdateOff")}</span></button>
         </div>
+      </div>
       </div>
     </div>
     ${renderKeysList()}
@@ -1389,6 +1443,21 @@ function renderKeysList(): string {
   return renderProfileList() + renderSubList();
 }
 
+function pingLabel(pr: number | "pinging" | "timeout" | { err: string } | undefined): string {
+  if (pr === undefined) return "";
+  if (pr === "pinging") return `<span class="ping-val pinging">${t("pingRunning")}</span>`;
+  if (pr === "timeout") return `<span class="ping-val timeout">${t("pingTimeout")}</span>`;
+  // A failure that is not a timeout carries its reason in the tooltip — folding
+  // everything into "timeout" once hid a key that could not even be parsed.
+  if (typeof pr === "object") return `<span class="ping-val timeout" title="${esc(pr.err)}">${t("pingError")}</span>`;
+  return `<span class="ping-val ok">${pr}${t("pingMs")}</span>`;
+}
+
+function pingFailure(e: unknown): "timeout" | { err: string } {
+  const msg = String(e ?? "");
+  return msg.includes("timeout") ? "timeout" : { err: msg };
+}
+
 function renderProfileList(): string {
   return profiles.length === 0
     ? ""
@@ -1398,6 +1467,7 @@ function renderProfileList(): string {
         <div class="profile-card${isActive ? " key-active" : ""}">
           <div class="profile-info"><span>${ICONS.user}</span><span>${esc(p.name)}</span>${isActive ? `<span class="badge-on" style="font-size:10px;padding:1px 6px;flex-shrink:0">${t("active")}</span>` : ""}</div>
           <div class="profile-actions">
+            ${pingLabel(pingResults.get("p:" + p.id))}
             <button class="btn-use-profile" data-id="${p.id}" title="${t("subSelectKey")}">${ICONS.play}</button>
             <div class="key-menu-wrap">
               <button class="btn-profile-menu" data-id="${p.id}" title="${t("more")}">${ICONS.kebab}</button>
@@ -1416,17 +1486,13 @@ function renderSubList(): string {
     ? ""
     : subscriptions.map(s => {
         const keyRows = s.keys.map((k, i) => {
-          const pr = pingResults.get(`${s.id}:${i}`);
-          const pingLabel = pr === "pinging" ? `<span class="ping-val pinging">${t("pingRunning")}</span>`
-            : pr === "timeout" ? `<span class="ping-val timeout">${t("pingTimeout")}</span>`
-            : pr !== undefined ? `<span class="ping-val ok">${pr}${t("pingMs")}</span>`
-            : "";
+          const rowPing = pingLabel(pingResults.get(`${s.id}:${i}`));
           const keyIsActive = isConnected && activeRef === "s:" + s.id + ":" + i;
           return `
           <div class="sub-key-row${keyIsActive ? " key-active" : ""}">
             <span class="sub-key-val" title="${esc(k)}">${esc(k.length > 50 ? k.slice(0, 50) + "…" : k)}</span>
             ${keyIsActive ? `<span class="badge-on" style="font-size:10px;padding:1px 6px;flex-shrink:0">${t("active")}</span>` : ""}
-            ${pingLabel}
+            ${rowPing}
             <button class="btn-use-sub-key" data-sub="${s.id}" data-idx="${i}" title="${t("subSelectKey")}">${ICONS.play}</button>
             <div class="key-menu-wrap">
               <button class="btn-key-menu" data-sub="${s.id}" data-idx="${i}" title="${t("more")}">${ICONS.kebab}</button>
@@ -1457,6 +1523,25 @@ function renderSubList(): string {
 }
 
 function bindProfileEvents(): void {
+  document.getElementById("btn-ping-all")?.addEventListener("click", async () => {
+    const targets: Array<{ id: string; key: string }> = [
+      ...profiles.map(p => ({ id: "p:" + p.id, key: p.key })),
+      ...subscriptions.flatMap(sub => sub.keys.map((k, i) => ({ id: `${sub.id}:${i}`, key: k }))),
+    ];
+    if (targets.length === 0) return;
+    targets.forEach(x => pingResults.set(x.id, "pinging"));
+    renderPage();
+    const mode = settings.ping_mode || "tcp";
+    await Promise.all(targets.map(async x => {
+      try {
+        pingResults.set(x.id, await invoke<number>("ping_key", { key: x.key, mode }));
+      } catch (e) {
+        pingResults.set(x.id, pingFailure(e));
+      }
+    }));
+    renderPage();
+  });
+
   document.getElementById("btn-add-key")?.addEventListener("click", (e) => {
     e.stopPropagation();
     const menu = document.querySelector<HTMLElement>(".key-menu[data-addmenu]");
@@ -1644,10 +1729,10 @@ function bindProfileEvents(): void {
       pingResults.set(mapKey, "pinging");
       renderPage();
       try {
-        const ms = await invoke<number>("ping_key", { key });
+        const ms = await invoke<number>("ping_key", { key, mode: settings.ping_mode || "tcp" });
         pingResults.set(mapKey, ms);
-      } catch {
-        pingResults.set(mapKey, "timeout");
+      } catch (e) {
+        pingResults.set(mapKey, pingFailure(e));
       }
       renderPage();
     });
@@ -1662,10 +1747,10 @@ function bindProfileEvents(): void {
       renderPage();
       await Promise.all(sub.keys.map(async (k, i) => {
         try {
-          const ms = await invoke<number>("ping_key", { key: k });
+          const ms = await invoke<number>("ping_key", { key: k, mode: settings.ping_mode || "tcp" });
           pingResults.set(`${subId}:${i}`, ms);
-        } catch {
-          pingResults.set(`${subId}:${i}`, "timeout");
+        } catch (e) {
+          pingResults.set(`${subId}:${i}`, pingFailure(e));
         }
       }));
       renderPage();
@@ -2297,8 +2382,8 @@ function renderSettings(): string {
         <button class="pill-btn ${!settings.dns_mode || settings.dns_mode === "tcp" ? "active" : ""}" data-dnsmode="tcp">TCP</button>
         <button class="pill-btn ${settings.dns_mode === "doh" ? "active" : ""}" data-dnsmode="doh">DoH</button>
       </div></div></div>
-      <div class="setting-row" style="align-items:center">
-        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+      <div class="setting-row">
+        <div class="setting-label-group">
           <span class="setting-label">${t("dnsStrategy")}</span>
           <span style="font-size:11px;opacity:.5;font-weight:400">${t("dnsStrategyHint")}</span>
         </div>
@@ -2307,23 +2392,63 @@ function renderSettings(): string {
           <button class="pill-btn ${settings.dns_strategy === "local" ? "active" : ""}" data-dnsstrategy="local">${t("dnsLocal")}</button>
         </div></div>
       </div>
-      <div class="setting-row" style="align-items:center">
-        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+      <div class="setting-row">
+        <div class="setting-label-group">
           <span class="setting-label">${t("mtuLabel")}</span>
           <span style="font-size:11px;opacity:.5;font-weight:400">${t("mtuHint")}</span>
         </div>
         <div class="setting-value"><input type="number" id="set-mtu" min="576" max="9000" value="${settings.mtu ?? 1500}" style="width:80px;box-sizing:border-box;text-align:right"/></div>
       </div>
-      <div class="setting-row" style="align-items:center">
-        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+      <div class="setting-row">
+        <div class="setting-label-group">
           <span class="setting-label">${t("tlsFragment")}</span>
           <span style="font-size:11px;opacity:.5;font-weight:400">${t("tlsFragmentHint")}</span>
         </div>
         <div class="setting-value"><label class="toggle"><input type="checkbox" id="set-tls-fragment" ${settings.tls_fragment ? "checked" : ""}/><span class="toggle-slider"></span></label></div>
       </div>
       <div class="setting-row"><span class="setting-label">${t("ipv6Label")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-ipv6" ${settings.ipv6 ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
-      <div class="setting-row" style="align-items:flex-start">
-        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+      <div class="setting-row">
+        <div class="setting-label-group">
+          <span class="setting-label">${t("tunStackLabel")}</span>
+          <span style="font-size:11px;opacity:.5;font-weight:400">${t("tunStackHint")}</span>
+        </div>
+        <div class="setting-value"><div class="pill-group">
+          <button class="pill-btn ${!settings.tun_stack_android || settings.tun_stack_android === "gvisor" ? "active" : ""}" data-tunstack="gvisor">gVisor</button>
+          <button class="pill-btn ${settings.tun_stack_android === "system" ? "active" : ""}" data-tunstack="system">System</button>
+          <button class="pill-btn ${settings.tun_stack_android === "mixed" ? "active" : ""}" data-tunstack="mixed">Mixed</button>
+        </div></div>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label-group">
+          <span class="setting-label">${t("quicLabel")}</span>
+          <span style="font-size:11px;opacity:.5;font-weight:400">${t("quicHint")}</span>
+        </div>
+        <div class="setting-value"><label class="toggle"><input type="checkbox" id="set-quic" ${settings.quic ? "checked" : ""}/><span class="toggle-slider"></span></label></div>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label-group">
+          <span class="setting-label">${t("killSwitchLabel")}</span>
+          <span style="font-size:11px;opacity:.5;font-weight:400">${vpnLockdown ? t("killSwitchOn") : t("killSwitchOff")}</span>
+        </div>
+        <div class="setting-value">
+          <span class="ping-val ${vpnLockdown ? "ok" : "timeout"}">${vpnLockdown ? "ON" : "OFF"}</span>
+          <button class="btn-sm" id="btn-open-vpn-settings">${t("killSwitchOpen")}</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label-group">
+          <span class="setting-label">${t("pingModeLabel")}</span>
+          <span style="font-size:11px;opacity:.5;font-weight:400">${t("pingModeHint")}</span>
+        </div>
+        <div class="setting-value"><div class="pill-group">
+          <button class="pill-btn ${!settings.ping_mode || settings.ping_mode === "tcp" ? "active" : ""}" data-pingmode="tcp">TCP</button>
+          <button class="pill-btn ${settings.ping_mode === "get" ? "active" : ""}" data-pingmode="get">GET</button>
+          <button class="pill-btn ${settings.ping_mode === "head" ? "active" : ""}" data-pingmode="head">HEAD</button>
+          <button class="pill-btn ${settings.ping_mode === "icmp" ? "active" : ""}" data-pingmode="icmp">ICMP</button>
+        </div></div>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label-group">
           <span class="setting-label">${t("bypassRu")}</span>
           <span style="font-size:11px;opacity:.5;font-weight:400">${t("bypassRuHint")}</span>
         </div>
@@ -2337,14 +2462,14 @@ function renderSettings(): string {
     <div class="settings-section">
       <div class="settings-section-title">${t("shareProxy")}</div>
       <div class="setting-row"><span class="setting-label">${t("mixedPort")}</span><div class="setting-value"><input type="number" id="set-port" value="${settings.mihomo_port}"/></div></div>
-      <div class="setting-row" style="align-items:center">
-        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+      <div class="setting-row">
+        <div class="setting-label-group">
           <span class="setting-label">${t("allowLan")}</span>
           <span style="font-size:11px;opacity:.5;font-weight:400">${t("allowLanHint")}</span>
         </div>
         <div class="setting-value"><label class="toggle"><input type="checkbox" id="set-allow-lan" ${settings.allow_lan ? "checked" : ""}/><span class="toggle-slider"></span></label></div>
       </div>
-      <div class="setting-row" style="align-items:flex-start">
+      <div class="setting-row">
         <span class="setting-label">${t("socksAuth")}</span>
         <div class="setting-value" style="flex-direction:column;align-items:stretch;gap:6px;flex:1;min-width:240px">
           <input type="text" id="set-socks-user" value="${esc(settings.socks_user || '')}" placeholder="${t("socksUser")}" autocomplete="off" style="width:100%;box-sizing:border-box;text-align:left"/>
@@ -2366,7 +2491,7 @@ function renderSettings(): string {
     <div class="settings-section">
       <div class="settings-section-title">${t("checkUpdates")}</div>
       <div class="setting-row">
-        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+        <div class="setting-label-group">
           <span class="setting-label">${t("currentVersion")}</span>
           <span style="font-size:11px;opacity:.5">${sysInfo.version}</span>
         </div>
@@ -2386,8 +2511,8 @@ function renderSettings(): string {
       <div class="settings-section-title">${t("mihomo")}</div>
       <div class="setting-row"><span class="setting-label">${t("mixedPort")}</span><div class="setting-value"><input type="number" id="set-port" value="${settings.mihomo_port}"/></div></div>
       <div class="setting-row"><span class="setting-label">${t("bindAddr")}</span><div class="setting-value"><input type="text" id="set-bind" value="${settings.socks_addr}"/></div></div>
-      <div class="setting-row" style="align-items:center">
-        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+      <div class="setting-row">
+        <div class="setting-label-group">
           <span class="setting-label">${t("allowLan")}</span>
           <span style="font-size:11px;opacity:.5;font-weight:400">${t("allowLanHint")}</span>
         </div>
@@ -2418,15 +2543,15 @@ function renderSettings(): string {
         <span style="font-size:11px;opacity:.5">${t("vpnDnsHint")}</span>
       </div></div>
       <div class="setting-row"><span class="setting-label">${t("ipv6Label")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-ipv6" ${settings.ipv6 ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
-      <div class="setting-row" style="align-items:flex-start">
-        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+      <div class="setting-row">
+        <div class="setting-label-group">
           <span class="setting-label">${t("bypassRu")}</span>
           <span style="font-size:11px;opacity:.5;font-weight:400">${t("bypassRuHint")}</span>
         </div>
         <div class="setting-value"><label class="toggle"><input type="checkbox" id="set-bypass-ru" ${settings.bypass_ru !== false ? "checked" : ""}/><span class="toggle-slider"></span></label></div>
       </div>
       <div class="setting-row"><span class="setting-label">${t("secretLabel")}</span><div class="setting-value"><span class="secret-value">${settings.secret}</span><button class="btn-sm" id="btn-copy-secret">${t("copy")}</button></div></div>
-      <div class="setting-row" style="align-items:flex-start">
+      <div class="setting-row">
         <span class="setting-label">${t("socksAuth")}</span>
         <div class="setting-value" style="flex-direction:column;align-items:stretch;gap:6px;flex:1;min-width:240px">
           <input type="text" id="set-socks-user" value="${esc(settings.socks_user || '')}" placeholder="${t("socksUser")}" autocomplete="off" style="width:100%;box-sizing:border-box;text-align:left"/>
@@ -2442,6 +2567,18 @@ function renderSettings(): string {
     <div class="settings-section">
       <div class="settings-section-title">${t("advanced")}</div>
       <div class="setting-row"><span class="setting-label">${t("killSwitch")}</span><div class="setting-value"><label class="toggle"><input type="checkbox" id="set-ks" ${settings.kill_switch ? "checked" : ""}/><span class="toggle-slider"></span></label></div></div>
+      <div class="setting-row">
+        <div class="setting-label-group">
+          <span class="setting-label">${t("pingModeLabel")}</span>
+          <span style="font-size:11px;opacity:.5;font-weight:400">${t("pingModeHint")}</span>
+        </div>
+        <div class="setting-value"><div class="pill-group">
+          <button class="pill-btn ${!settings.ping_mode || settings.ping_mode === "tcp" ? "active" : ""}" data-pingmode="tcp">TCP</button>
+          <button class="pill-btn ${settings.ping_mode === "get" ? "active" : ""}" data-pingmode="get">GET</button>
+          <button class="pill-btn ${settings.ping_mode === "head" ? "active" : ""}" data-pingmode="head">HEAD</button>
+          <button class="pill-btn ${settings.ping_mode === "icmp" ? "active" : ""}" data-pingmode="icmp">ICMP</button>
+        </div></div>
+      </div>
       <div class="setting-row"><span class="setting-label">${t("ipSpoofing")}</span><div class="setting-value" style="flex-direction:column;align-items:stretch;gap:4px">
         <input type="text" id="set-spoof-ips" value="${esc(settings.spoof_ips || '')}" placeholder="192.168.1.10, 192.168.1.11" style="width:100%;box-sizing:border-box;text-align:left"/>
         <span style="font-size:11px;opacity:.5">${t("spoofIpsHint")}</span>
@@ -2457,7 +2594,7 @@ function renderSettings(): string {
     <div class="settings-section">
       <div class="settings-section-title">${t("checkUpdates")}</div>
       <div class="setting-row">
-        <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+        <div class="setting-label-group">
           <span class="setting-label">${t("currentVersion")}</span>
           <span style="font-size:11px;opacity:.5">${sysInfo.version}</span>
         </div>
@@ -2517,6 +2654,25 @@ function bindSettingsEvents(): void {
     persistSettings();
     if (isConnected) showToast(t("reconnectToApply"), "info", 3000);
   });
+  (document.getElementById("set-quic") as HTMLInputElement)?.addEventListener("change", function () {
+    settings.quic = this.checked;
+    persistSettings();
+    if (isConnected) showToast(t("reconnectToApply"), "info", 3000);
+  });
+  document.getElementById("btn-open-vpn-settings")?.addEventListener("click", async () => {
+    try { await invoke("open_vpn_settings"); } catch (e) { showToast(String(e), "error", 3000); }
+  });
+  document.querySelectorAll<HTMLElement>(".pill-btn[data-pingmode]").forEach(el => el.addEventListener("click", () => {
+    settings.ping_mode = el.dataset.pingmode || "tcp";
+    persistSettings();
+    renderPage();
+  }));
+  document.querySelectorAll<HTMLElement>(".pill-btn[data-tunstack]").forEach(el => el.addEventListener("click", () => {
+    settings.tun_stack_android = el.dataset.tunstack || "gvisor";
+    persistSettings();
+    if (isConnected) showToast(t("reconnectToApply"), "info", 3000);
+    renderPage();
+  }));
   document.querySelectorAll<HTMLElement>(".pill-btn[data-vpndns]").forEach(el => el.addEventListener("click", () => {
     const val = el.dataset.vpndns || "1.1.1.1:53";
     settings.vpn_dns = val === "1.1.1.1:53" && !el.classList.contains("active") ? val : val;

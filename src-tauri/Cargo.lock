@@ -5198,7 +5198,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "whisp"
-version = "0.1.5"
+version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
  "keyring",
@@ -5206,6 +5206,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "socket2",
  "tauri",
  "tauri-build",
  "tauri-plugin-barcode-scanner",

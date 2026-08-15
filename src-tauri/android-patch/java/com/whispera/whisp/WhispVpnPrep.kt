@@ -27,6 +27,8 @@ object WhispVpnPrep {
     @Volatile private var pendingMtu: Int = 1500
     @Volatile private var pendingTlsFragment: Boolean = false
     @Volatile private var pendingAutoConnect: Boolean = false
+    @Volatile private var pendingTunStack: String = "gvisor"
+    @Volatile private var pendingQuic: Boolean = false
 
     @JvmStatic fun setActivity(a: Activity?) { currentActivity = a }
 
@@ -49,7 +51,7 @@ object WhispVpnPrep {
         }
     }
 
-    @JvmStatic fun savePending(rulesJson: String, connKey: String, vpnDns: String, ipv6: Boolean, hwid: Boolean, tlsFingerprint: String, mixedPort: Int, allowLan: Boolean, socksUser: String, socksPass: String, dnsMode: String, dnsStrategy: String, mtu: Int, tlsFragment: Boolean, autoConnect: Boolean) {
+    @JvmStatic fun savePending(rulesJson: String, connKey: String, vpnDns: String, ipv6: Boolean, hwid: Boolean, tlsFingerprint: String, mixedPort: Int, allowLan: Boolean, socksUser: String, socksPass: String, dnsMode: String, dnsStrategy: String, mtu: Int, tlsFragment: Boolean, autoConnect: Boolean, tunStack: String, quic: Boolean) {
         pendingRulesJson = rulesJson
         pendingConnKey   = connKey
         pendingVpnDns    = vpnDns.ifEmpty { "1.1.1.1" }
@@ -65,8 +67,38 @@ object WhispVpnPrep {
         pendingMtu       = if (mtu in 576..9000) mtu else 1500
         pendingTlsFragment = tlsFragment
         pendingAutoConnect = autoConnect
+        pendingTunStack  = if (tunStack in listOf("system", "gvisor", "mixed")) tunStack else "gvisor"
+        pendingQuic      = quic
         hasPending       = true
         Log.d("WhispVpnPrep", "savePending: key=${connKey.take(6)}… dns=$vpnDns ipv6=$ipv6 hwid=$hwid fp=$tlsFingerprint mixedPort=$mixedPort allowLan=$allowLan dnsMode=$pendingDnsMode dnsStrategy=$pendingDnsStrategy mtu=$pendingMtu tlsFragment=$pendingTlsFragment")
+    }
+
+    // Android's own "Block connections without VPN" is the only thing that keeps
+    // traffic in when this process dies, and no app can switch it on for the
+    // user — so report its real state and take them to it.
+    @JvmStatic fun isLockdown(): Boolean {
+        val a = currentActivity ?: return false
+        val p = a.getSharedPreferences("whisp_vpn", Context.MODE_PRIVATE)
+        return p.getBoolean("lockdown", false)
+    }
+
+    @JvmStatic fun openVpnSettings(): Int {
+        val a = currentActivity ?: return -1
+        return try {
+            a.startActivity(Intent("android.net.vpn.SETTINGS").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+            0
+        } catch (t: Throwable) {
+            try {
+                a.startActivity(Intent(android.provider.Settings.ACTION_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                0
+            } catch (t2: Throwable) {
+                Log.e("WhispVpnPrep", "openVpnSettings failed", t2); -2
+            }
+        }
     }
 
     @JvmStatic fun startPending(ctx: Context) {
@@ -90,6 +122,8 @@ object WhispVpnPrep {
             putExtra(WhispVpnService.EXTRA_MTU,        pendingMtu.toString())
             putExtra(WhispVpnService.EXTRA_TLS_FRAGMENT, if (pendingTlsFragment) "1" else "0")
             putExtra(WhispVpnService.EXTRA_AUTO_CONNECT, if (pendingAutoConnect) "1" else "0")
+            putExtra(WhispVpnService.EXTRA_TUN_STACK, pendingTunStack)
+            putExtra(WhispVpnService.EXTRA_QUIC, if (pendingQuic) "1" else "0")
         }
         ctx.startForegroundService(intent)
     }

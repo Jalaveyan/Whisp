@@ -914,7 +914,7 @@ body {
 
 .profile-info svg { color: var(--md-on-surface-var); flex-shrink: 0; }
 
-.profile-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.profile-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 
 /* Subscription cards have a third child (.sub-keys) — wrap it below the header row */
 .sub-card {
@@ -982,11 +982,22 @@ button.spinning svg {
   flex-direction: column;
   gap: 2px;
 }
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Fixed column so the value never shifts the buttons: rows line up whether the
+   result is "42 ms", "timeout" or nothing at all. */
 .ping-val {
   font-size: 10px;
   font-weight: 600;
   white-space: nowrap;
   flex-shrink: 0;
+  min-width: 58px;
+  text-align: right;
 }
 .ping-val.ok { color: #4caf50; }
 .ping-val.timeout { color: var(--danger, #e55); }
@@ -1170,6 +1181,16 @@ button.spinning svg {
 }
 
 .settings-link:hover { text-decoration: underline; }
+
+/* Every row aligns the same way — a hint under the label must not shift the
+   control next to it, or rows with and without hints read as two designs. */
+.setting-label-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
 
 .setting-row {
   display: flex;

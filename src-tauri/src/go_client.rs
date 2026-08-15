@@ -27,6 +27,7 @@ pub struct GoClientConfig<'a> {
     pub spoof_ips: &'a str,
     pub hwid: bool,
     pub tls_fingerprint: &'a str,
+    pub split_rules: &'a str,
 }
 
 fn is_forceable_fingerprint(v: &str) -> bool {
@@ -53,6 +54,9 @@ impl GoClientManager {
         let mut args = format!("{} -socks \"{}\" -no-tun", key_part, cfg.socks_addr);
         if cfg.kill_switch {
             args.push_str(" -kill-switch");
+        }
+        if !cfg.split_rules.is_empty() {
+            args.push_str(&format!(" -split-rules \"{}\"", cfg.split_rules.replace('"', "\\\"")));
         }
         if !cfg.transport.is_empty() {
             args.push_str(&format!(" -transport {}", cfg.transport));
@@ -207,6 +211,10 @@ impl GoClientManager {
 
         if cfg.kill_switch {
             cmd.arg("-kill-switch");
+        }
+
+        if !cfg.split_rules.is_empty() {
+            cmd.arg("-split-rules").arg(cfg.split_rules);
         }
 
         if !cfg.transport.is_empty() {

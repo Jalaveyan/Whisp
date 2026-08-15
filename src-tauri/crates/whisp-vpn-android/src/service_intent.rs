@@ -36,6 +36,8 @@ const EXTRA_DNS_STRATEGY: &str = "com.whispera.whisp.EXTRA_DNS_STRATEGY";
 const EXTRA_MTU: &str = "com.whispera.whisp.EXTRA_MTU";
 const EXTRA_TLS_FRAGMENT: &str = "com.whispera.whisp.EXTRA_TLS_FRAGMENT";
 const EXTRA_AUTO_CONNECT: &str = "com.whispera.whisp.EXTRA_AUTO_CONNECT";
+const EXTRA_TUN_STACK: &str = "com.whispera.whisp.EXTRA_TUN_STACK";
+const EXTRA_QUIC: &str = "com.whispera.whisp.EXTRA_QUIC";
 
 fn vm_and_ctx() -> Result<(JavaVM, *mut std::ffi::c_void), String> {
     // SAFETY: ndk_context::android_context() возвращает указатели,
@@ -51,7 +53,7 @@ fn vm_and_ctx() -> Result<(JavaVM, *mut std::ffi::c_void), String> {
     Ok((vm, ctx.context()))
 }
 
-fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>, vpn_dns: Option<&str>, ipv6: Option<bool>, hwid: Option<bool>, tls_fingerprint: Option<&str>, mixed_port: Option<u16>, allow_lan: Option<bool>, socks_user: Option<&str>, socks_pass: Option<&str>, dns_mode: Option<&str>, dns_strategy: Option<&str>, mtu: Option<u16>, tls_fragment: Option<bool>, auto_connect: Option<bool>, _stop: bool) -> Result<(), String> {
+fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>, vpn_dns: Option<&str>, ipv6: Option<bool>, hwid: Option<bool>, tls_fingerprint: Option<&str>, mixed_port: Option<u16>, allow_lan: Option<bool>, socks_user: Option<&str>, socks_pass: Option<&str>, dns_mode: Option<&str>, dns_strategy: Option<&str>, mtu: Option<u16>, tls_fragment: Option<bool>, auto_connect: Option<bool>, tun_stack: Option<&str>, quic: Option<bool>, _stop: bool) -> Result<(), String> {
     let (vm, ctx_ptr) = vm_and_ctx()?;
     let mut env = vm
         .attach_current_thread()
@@ -119,6 +121,8 @@ fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>, v
     if let Some(dns) = vpn_dns { put_extra(EXTRA_VPN_DNS, dns)?; }
     if let Some(v6) = ipv6 { put_extra(EXTRA_IPV6, if v6 { "1" } else { "0" })?; }
     if let Some(h) = hwid { put_extra(EXTRA_HWID, if h { "1" } else { "0" })?; }
+    if let Some(s) = tun_stack { put_extra(EXTRA_TUN_STACK, s)?; }
+    if let Some(q) = quic { put_extra(EXTRA_QUIC, if q { "1" } else { "0" })?; }
     if let Some(fp) = tls_fingerprint { put_extra(EXTRA_TLS_FINGERPRINT, fp)?; }
     if let Some(p) = mixed_port { put_extra(EXTRA_MIXED_PORT, &p.to_string())?; }
     if let Some(lan) = allow_lan { put_extra(EXTRA_ALLOW_LAN, if lan { "1" } else { "0" })?; }
@@ -144,7 +148,7 @@ fn send_action(action: &str, rules_json: Option<&str>, conn_key: Option<&str>, v
     Ok(())
 }
 
-pub fn start_vpn_service(rules_json: &str, conn_key: &str, vpn_dns: &str, ipv6: bool, hwid: bool, tls_fingerprint: &str, mixed_port: u16, allow_lan: bool, socks_user: &str, socks_pass: &str, dns_mode: &str, dns_strategy: &str, mtu: u16, tls_fragment: bool, auto_connect: bool) -> Result<(), String> {
+pub fn start_vpn_service(rules_json: &str, conn_key: &str, vpn_dns: &str, ipv6: bool, hwid: bool, tls_fingerprint: &str, mixed_port: u16, allow_lan: bool, socks_user: &str, socks_pass: &str, dns_mode: &str, dns_strategy: &str, mtu: u16, tls_fragment: bool, auto_connect: bool, tun_stack: &str, quic: bool) -> Result<(), String> {
     let dns = if vpn_dns.is_empty() { None } else { Some(vpn_dns) };
     let fp = if tls_fingerprint.is_empty() { None } else { Some(tls_fingerprint) };
     let user = if socks_user.is_empty() { None } else { Some(socks_user) };
@@ -152,13 +156,13 @@ pub fn start_vpn_service(rules_json: &str, conn_key: &str, vpn_dns: &str, ipv6: 
     let dm = if dns_mode.is_empty() { None } else { Some(dns_mode) };
     let ds = if dns_strategy.is_empty() { None } else { Some(dns_strategy) };
     let mtu_opt = if mtu > 0 { Some(mtu) } else { None };
-    let r = send_action(ACTION_START, Some(rules_json), Some(conn_key), dns, Some(ipv6), Some(hwid), fp, Some(mixed_port), Some(allow_lan), user, pass, dm, ds, mtu_opt, Some(tls_fragment), Some(auto_connect), false);
+    let r = send_action(ACTION_START, Some(rules_json), Some(conn_key), dns, Some(ipv6), Some(hwid), fp, Some(mixed_port), Some(allow_lan), user, pass, dm, ds, mtu_opt, Some(tls_fragment), Some(auto_connect), Some(tun_stack), Some(quic), false);
     if r.is_ok() { set_vpn_active(true); }
     r
 }
 
 pub fn stop_vpn_service() -> Result<(), String> {
-    let r = send_action(ACTION_STOP, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, true);
+    let r = send_action(ACTION_STOP, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, true);
     set_vpn_active(false);
     r
 }
@@ -166,6 +170,53 @@ pub fn stop_vpn_service() -> Result<(), String> {
 const PREP_CLASS: &str = "com/whispera/whisp/WhispVpnPrep";
 
 /// Возвращает true если VPN permission уже выдан, false — нужно вызвать request_vpn_permission.
+pub fn is_lockdown_enabled() -> Result<bool, String> {
+    prep_static_bool("isLockdown")
+}
+
+pub fn open_vpn_settings() -> Result<i32, String> {
+    prep_static_int("openVpnSettings")
+}
+
+fn prep_class<'a>(env: &mut jni::JNIEnv<'a>, ctx_ptr: *mut std::ffi::c_void) -> Result<jni::objects::JClass<'a>, String> {
+    let context = unsafe { JObject::from_raw(ctx_ptr as jni::sys::jobject) };
+    let app_loader = env
+        .call_method(&context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .and_then(|v| v.l())
+        .map_err(|e| format!("getClassLoader: {}", e))?;
+    let cls_name = env
+        .new_string(PREP_CLASS.replace('/', "."))
+        .map_err(|e| e.to_string())?;
+    let cls = env
+        .call_method(
+            &app_loader,
+            "loadClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[JValue::Object(&cls_name.into())],
+        )
+        .and_then(|v| v.l())
+        .map_err(|e| format!("loadClass {}: {}", PREP_CLASS, e))?;
+    Ok(cls.into())
+}
+
+fn prep_static_bool(name: &str) -> Result<bool, String> {
+    let (vm, ctx_ptr) = vm_and_ctx()?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let cls = prep_class(&mut env, ctx_ptr)?;
+    env.call_static_method(&cls, name, "()Z", &[])
+        .and_then(|v| v.z())
+        .map_err(|e| format!("{}: {}", name, e))
+}
+
+fn prep_static_int(name: &str) -> Result<i32, String> {
+    let (vm, ctx_ptr) = vm_and_ctx()?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let cls = prep_class(&mut env, ctx_ptr)?;
+    env.call_static_method(&cls, name, "()I", &[])
+        .and_then(|v| v.i())
+        .map_err(|e| format!("{}: {}", name, e))
+}
+
 pub fn is_vpn_prepared() -> Result<bool, String> {
     let (vm, ctx_ptr) = vm_and_ctx()?;
     let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
@@ -226,7 +277,7 @@ pub fn request_vpn_permission() -> Result<i32, String> {
 
 /// Сохраняет параметры VPN в WhispVpnPrep.savePending() для авто-запуска
 /// после onActivityResult (пользователь разрешил VPN).
-pub fn save_pending_start(rules_json: &str, conn_key: &str, vpn_dns: &str, ipv6: bool, hwid: bool, tls_fingerprint: &str, mixed_port: u16, allow_lan: bool, socks_user: &str, socks_pass: &str, dns_mode: &str, dns_strategy: &str, mtu: u16, tls_fragment: bool, auto_connect: bool) -> Result<(), String> {
+pub fn save_pending_start(rules_json: &str, conn_key: &str, vpn_dns: &str, ipv6: bool, hwid: bool, tls_fingerprint: &str, mixed_port: u16, allow_lan: bool, socks_user: &str, socks_pass: &str, dns_mode: &str, dns_strategy: &str, mtu: u16, tls_fragment: bool, auto_connect: bool, tun_stack: &str, quic: bool) -> Result<(), String> {
     let (vm, ctx_ptr) = vm_and_ctx()?;
     let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
     let context = unsafe { JObject::from_raw(ctx_ptr as jni::sys::jobject) };
@@ -248,10 +299,11 @@ pub fn save_pending_start(rules_json: &str, conn_key: &str, vpn_dns: &str, ipv6:
     let j_pass   = env.new_string(socks_pass).map_err(|e| e.to_string())?;
     let j_mode   = env.new_string(dns_mode).map_err(|e| e.to_string())?;
     let j_strat  = env.new_string(dns_strategy).map_err(|e| e.to_string())?;
+    let j_stack  = env.new_string(tun_stack).map_err(|e| e.to_string())?;
     env.call_static_method(
         &cls_class,
         "savePending",
-        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZLjava/lang/String;IZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZZ)V",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZLjava/lang/String;IZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZZLjava/lang/String;Z)V",
         &[
             JValue::Object(&j_rules.into()),
             JValue::Object(&j_key.into()),
@@ -268,6 +320,8 @@ pub fn save_pending_start(rules_json: &str, conn_key: &str, vpn_dns: &str, ipv6:
             JValue::Int(mtu as i32),
             JValue::Bool(if tls_fragment { 1 } else { 0 }),
             JValue::Bool(if auto_connect { 1 } else { 0 }),
+            JValue::Object(&j_stack.into()),
+            JValue::Bool(if quic { 1 } else { 0 }),
         ],
     )
     .map_err(|e| format!("savePending: {}", e))?;
